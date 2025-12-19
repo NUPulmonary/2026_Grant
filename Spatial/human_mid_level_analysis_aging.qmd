@@ -1,0 +1,196 @@
+```{r setup}
+library(tidyverse)
+library(Seurat)
+library(ggsci)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(reticulate)
+library(readxl)
+library(RPushbullet)
+
+
+nejm_pal = pal_nejm()(8)
+
+#future
+plan("multisession", workers = 1)
+options(future.globals.maxSize = 40 * 1e3 * 1024^2) #40gb
+
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+```
+
+```{r}
+sa = readRDS([REDACTED_FILE_PATH]
+xenium_sample = substring(colnames(sa), 1, 62)
+sa = AddMetaData(sa, xenium_sample, col.name = "fsm_filepath")
+
+#add meta-FOV
+sa = concatenate_fovs(sa, n_cols = 4, append = TRUE)
+
+#add metadata and celltype annotations
+md = read.csv([REDACTED_FILE_PATH]
+              na.strings = c("")) %>% 
+  dplyr::mutate(ApoE = factor(ApoE),
+                ApoE4_copies = str_count(ApoE, "4"),
+                ApoE3_copies = str_count(ApoE, "3"),
+                ApoE2_copies = str_count(ApoE, "2"))
+tmp = left_join(sa@meta.data, md)
+sa = AddMetaData(sa, tmp)
+rm(md, tmp)
+```  
+
+```{r}
+annotations = read_excel([REDACTED_FILE_PATH] %>% 
+  dplyr::mutate(cluster = factor(cluster))
+tmp = left_join(sa@meta.data, annotations, by = c("seurat_clusters" = "cluster"))
+sa = AddMetaData(sa, tmp)
+
+#fix SCT naming issue (known seurat bug): https://github.com/satijalab/seurat/issues/8235
+for(i in 1:length(sa@assays$SCT@SCTModel.list))
+{
+  slot(object = sa@assays$SCT@SCTModel.list[[i]], name="umi.assay") = "Xenium"
+}
+
+DimPlot(sa, label = TRUE, group.by = "cell_type") +
+  theme(legend.position = "none")
+DimPlot(sa, label = TRUE, group.by = "seurat_clusters") +
+  theme(legend.position = "none")
+```
+
+```{r}
+microglia = subset(sa, cell_type %in% c("Microglia", "Monocytes", "Border-Associated Macrophages"))
+microglia = RunPCA(microglia, npcs = 50, verbose = TRUE)
+ElbowPlot(microglia, ndims = 50)
+```
+
+```{r}
+microglia = RunUMAP(microglia, dims = 1:14, verbose = FALSE)
+microglia = FindNeighbors(microglia, dims = 1:14, verbose = TRUE)
+microglia = FindClusters(microglia, resolution = 0.8, verbose = TRUE)
+
+microglia = PrepSCTFindMarkers(object = microglia, assay = "SCT")
+microglia_markers = FindAllMarkers(microglia, recorrect_umi=FALSE)
+microglia_markers = microglia_markers %>% 
+  dplyr::arrange(cluster, desc(avg_log2FC))
+write_csv(microglia_markers, [REDACTED_FILE_PATH]
+
+DimPlot(microglia, label = TRUE) +
+  theme(legend.position = "none")
+VlnPlot(microglia, c("nCount_SCT", "nFeature_SCT"), pt.size = 0)
+```
+
+```{r}
+oligodendrocytes = subset(sa, cell_type %in% c("Oligodendrocytes", "OPCs"))
+oligodendrocytes = RunPCA(oligodendrocytes, npcs = 50, verbose = TRUE)
+ElbowPlot(oligodendrocytes, ndims = 50)
+```
+
+```{r}
+oligodendrocytes = RunUMAP(oligodendrocytes, dims = 1:17, verbose = FALSE)
+oligodendrocytes = FindNeighbors(oligodendrocytes, dims = 1:17, verbose = TRUE)
+oligodendrocytes = FindClusters(oligodendrocytes, resolution = 0.8, verbose = TRUE)
+
+oligodendrocytes = PrepSCTFindMarkers(object = oligodendrocytes, assay = "SCT")
+oligodendrocytes_markers = FindAllMarkers(oligodendrocytes, recorrect_umi=FALSE)
+oligodendrocytes_markers = oligodendrocytes_markers %>% 
+  dplyr::arrange(cluster, desc(avg_log2FC))
+write_csv(oligodendrocytes_markers, [REDACTED_FILE_PATH]
+
+DimPlot(oligodendrocytes, label = TRUE) +
+  theme(legend.position = "none")
+VlnPlot(oligodendrocytes, c("nCount_SCT", "nFeature_SCT"), pt.size = 0)
+```   
+
+```{r}
+astrocytes = subset(sa, cell_type == "Astrocytes")
+astrocytes = RunPCA(astrocytes, npcs = 50, verbose = TRUE)
+ElbowPlot(astrocytes, ndims = 50)
+```
+
+```{r}
+astrocytes = RunUMAP(astrocytes, dims = 1:29, verbose = FALSE)
+astrocytes = FindNeighbors(astrocytes, dims = 1:29, verbose = TRUE)
+astrocytes = FindClusters(astrocytes, resolution = 0.8, verbose = TRUE)
+
+astrocytes = PrepSCTFindMarkers(object = astrocytes, assay = "SCT")
+astrocytes_markers = FindAllMarkers(astrocytes, recorrect_umi=FALSE)
+astrocytes_markers = astrocytes_markers %>% 
+  dplyr::arrange(cluster, desc(avg_log2FC))
+write_csv(astrocytes_markers, [REDACTED_FILE_PATH]
+
+DimPlot(astrocytes, label = TRUE) +
+  theme(legend.position = "none")
+VlnPlot(astrocytes, c("nCount_SCT", "nFeature_SCT"), pt.size = 0)
+```   
+
+```{r}
+#microglia
+microglia_md = microglia@meta.data %>% 
+  dplyr::select(seurat_clusters) %>% 
+  rownames_to_column("cell")
+microglia_anno = read_excel([REDACTED_FILE_PATH] %>% 
+  dplyr::mutate(cluster = factor(cluster))
+microglia_md = left_join(microglia_md, microglia_anno, by = c("seurat_clusters" = "cluster"))
+
+#oligodendrocytes
+oligodendrocyte_md = oligodendrocytes@meta.data %>% 
+  dplyr::select(seurat_clusters) %>% 
+  rownames_to_column("cell")
+oligodendrocyte_anno = read_excel([REDACTED_FILE_PATH] %>% 
+  dplyr::mutate(cluster = factor(cluster))
+oligodendrocyte_md = left_join(oligodendrocyte_md, oligodendrocyte_anno, by = c("seurat_clusters" = "cluster"))
+
+#astrocytes
+astrocyte_md = astrocytes@meta.data %>% 
+  dplyr::select(seurat_clusters) %>% 
+  rownames_to_column("cell")
+astrocyte_anno = read_excel([REDACTED_FILE_PATH] %>% 
+  dplyr::mutate(cluster = factor(cluster))
+astrocyte_md = left_join(astrocyte_md, astrocyte_anno, by = c("seurat_clusters" = "cluster"))
+
+#combined
+subcluster_md = bind_rows(microglia_md, oligodendrocyte_md, astrocyte_md) %>% 
+  column_to_rownames("cell")
+rm(microglia_md, oligodendrocyte_md, astrocyte_md, microglia_anno, oligodendrocyte_anno, astrocyte_anno)
+```
+
+```{r}
+#cluster ID
+sa@meta.data$seurat_clusters = as.character(sa@meta.data$seurat_clusters) #need to undo factorization first
+sa@meta.data[rownames(subcluster_md), "seurat_clusters"] = paste(sa@meta.data[rownames(subcluster_md), "seurat_clusters"],
+                                                                subcluster_md$seurat_clusters, sep = "_")
+sa@meta.data$seurat_clusters = factor(sa@meta.data$seurat_clusters)
+
+#celltype
+sa@meta.data[rownames(subcluster_md), "cell_type"] = subcluster_md$cell_type
+sa@meta.data$cell_type = factor(sa@meta.data$cell_type)
+
+#cell state
+sa@meta.data[rownames(subcluster_md), "cell_state"] = subcluster_md$cell_state
+sa@meta.data$cell_state = factor(sa@meta.data$cell_state)
+
+#comments
+sa@meta.data[rownames(subcluster_md), "notes"] = subcluster_md$notes
+
+rm(microglia, oligodendrocytes, astrocytes)
+gc()
+```
+
+```{r}
+dim(sa)
+sa = subset(sa, cell_type != "Unresolved" & !grepl("REMOVE", notes) & cell_type != "Doublets")
+dim(sa)
+```
+
+```{r}
+tmp = sa@meta.data %>% 
+  unite(col = typestate, cell_type, cell_state, sep = ", ", na.rm = TRUE) %>% 
+  dplyr::select(typestate)
+sa = AddMetaData(sa, metadata = tmp$typestate, col.name = "typestate")
+rm(tmp)
+Idents(sa) = sa$typestate
+sa = PrepSCTFindMarkers(object = sa, assay = "SCT")
+sa@misc$markers = FindAllMarkers(sa, only.pos = T, max.cells.per.ident = 10e3, random.seed = 12345)
+saveRDS(sa, [REDACTED_FILE_PATH]
+```

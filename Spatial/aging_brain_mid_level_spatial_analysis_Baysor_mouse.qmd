@@ -1,0 +1,455 @@
+```{r setup}
+library(Seurat)
+library(future)
+library(tidyverse)
+library(ggsci)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(viridis)
+library(Cairo)
+library(dittoSeq)
+library(circlize)
+library(DESeq2)
+library(fgsea)
+library(parallel)
+library(RPushbullet)
+library(broom)
+library(ggsignif)
+library(limma) #for more efficient wilcox tests
+library(readxl)
+library(ggrepel)
+library(patchwork)
+library(BiocParallel)
+library(ggplotify)
+library(janitor)
+library(dendsort)
+library(reticulate)
+
+nejm_pal = pal_nejm()(8)
+
+#future
+plan("multisession", workers = 1)
+options(future.globals.maxSize = 40 * 1e3 * 1024^2) #40gb
+
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+```
+
+```{r eval=FALSE}
+complete = readRDS([REDACTED_FILE_PATH]
+```
+
+```{r eval=FALSE}
+complete = RunPCA(complete, npcs = 50, features = rownames(complete))
+ElbowPlot(complete, ndims = 50)
+```
+
+```{r eval=FALSE}
+complete = RunUMAP(complete, dims = 1:42)
+complete = FindNeighbors(complete, reduction = "pca", dims = 1:42)
+
+plan("multisession", workers = 1)
+complete = FindClusters(complete, resolution = 0.8, algorithm = 1)
+```
+
+```{r eval=FALSE}
+#fix SCT naming issue (known seurat bug): https://github.com/satijalab/seurat/issues/8235
+for(i in 1:length(complete@assays$SCT@SCTModel.list))
+{
+  slot(object = complete@assays$SCT@SCTModel.list[[i]], name="umi.assay") = "Xenium"
+}
+complete = PrepSCTFindMarkers(complete)
+saveRDS(complete, [REDACTED_FILE_PATH]
+markers = FindAllMarkers(complete, only.pos = TRUE, max.cells.per.ident = 10e3)
+write_csv(markers, [REDACTED_FILE_PATH]
+```    
+
+```{r}
+complete = readRDS([REDACTED_FILE_PATH]
+UMAPPlot(complete, label = TRUE) + 
+  theme(legend.position = "none")
+```
+
+```{r}
+tmp = complete@images
+
+complete@images[[1]] = tmp[["Rogan_output.XETG00190__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__193909"]] #young
+complete@images[[2]] = tmp[["Rogan_output.XETG00191__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__181046"]] #young
+complete@images[[3]] = tmp[["Rogan_output.XETG00190__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__193909"]] #old
+complete@images[[4]] = tmp[["Rogan_output.XETG00191__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__181046"]] #old
+
+names(complete@images) = c("Rogan_output.XETG00190__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__193909",
+                          "Rogan_output.XETG00191__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__181046",
+                          "Rogan_output.XETG00190__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__193909",
+                          "Rogan_output.XETG00191__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__181046")
+
+rm(tmp)
+gc()
+```
+
+```{r}
+complete@images[["Rogan_output.XETG00190__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__193909"]] = 
+  rotate_fov(fov = complete@images[["Rogan_output.XETG00190__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__193909"]],
+             angle_degrees = 90)
+complete@images[["Rogan_output.XETG00191__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__181046"]] = 
+  rotate_fov(fov = complete@images[["Rogan_output.XETG00191__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__181046"]],
+             angle_degrees = 90)
+complete@images[["Rogan_output.XETG00190__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__193909"]] = 
+  rotate_fov(fov = complete@images[["Rogan_output.XETG00190__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__193909"]],
+             angle_degrees = 270)
+complete@images[["Rogan_output.XETG00191__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__181046"]] = 
+  rotate_fov(fov = complete@images[["Rogan_output.XETG00191__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__181046"]],
+             angle_degrees = 270)
+```
+
+```{r}
+complete = concatenate_fovs(complete, offset = 2000)
+ImageDimPlot(complete, fov = "combined", flip_xy = FALSE)
+```
+
+```{r}
+FeaturePlot(complete, features = c("P2ry12", "Cx3cr1", "Mrc1"))
+```
+
+```{r}
+microglia = subset(complete, subset = seurat_clusters == c(17)) 
+microglia = PrepSCTFindMarkers(microglia)
+microglia = RunPCA(microglia, npcs = 50, features = rownames(microglia))
+ElbowPlot(microglia, ndims = 50)
+```   
+
+```{r warning=FALSE}
+microglia = RunUMAP(microglia, dims = c(1:17), n.components = 3)
+microglia = FindNeighbors(microglia, reduction = "pca", dims = c(1:17))
+microglia = FindClusters(microglia, resolution = 0.8, algorithm = 1, method = "igraph")
+```
+
+```{r}
+microglia_markers = FindAllMarkers(microglia, only.pos = TRUE, max.cells.per.ident = 10e3, recorrect_umi = FALSE)
+write_csv(microglia_markers, [REDACTED_FILE_PATH]
+UMAPPlot(microglia, label = TRUE) +
+  theme(legend.position = "none")
+UMAPPlot(microglia, label = TRUE, dims = c(2,3)) +
+  theme(legend.position = "none")
+```   
+
+```{r}
+FeaturePlot(microglia, c("P2ry12", "Spp1", "Cst7", "Lpl", "Ifi204", "Ifi27l2a"), order = TRUE)
+DotPlot(microglia, c("P2ry12", "Spp1", "Cst7", "Lpl", "Ifi204", "Ifi27l2a", "Ifit2", "Ifit3", "Irf7"))
+```   
+
+```{r eval=FALSE}
+markers = c("Cst7", "Spp1",
+            "Lpl", "Csf1", "Itgax",
+            "Igf1", "Ifit3", "Irf7",
+            "Ifi204", "Oas1a", "Trem2",
+            "Tmem119", "P2ry12", "Cx3cr1",
+            "Mertk", "Trim30a", "Csf1r",
+            "Ccl3","Ifi27l2a", "Ifit2")
+
+mg_clusters = microglia@meta.data %>% 
+  dplyr::select(seurat_clusters) %>% 
+  rownames_to_column("cell")
+
+n_cells = microglia@meta.data %>% 
+  group_by(seurat_clusters) %>% 
+  dplyr::summarise(n_cells = n()) %>% 
+  column_to_rownames("seurat_clusters")
+
+ha_fun = colorRamp2(c(0, max(n_cells$n_cells)), c("gray80", "black"))
+ha = HeatmapAnnotation(df = n_cells,
+                       col = list(n_cells = ha_fun))
+
+mg_cluster_mat = FetchData(object = microglia, vars = markers) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("cell") %>% 
+  pivot_longer(cols = 2:ncol(.), names_to = "gene", values_to = "expression") %>% 
+  left_join(., mg_clusters) %>% 
+  group_by(seurat_clusters, gene) %>% 
+  dplyr::summarize(mean_expression = mean(expression, na.rm = TRUE)) %>% 
+  pivot_wider(names_from = "seurat_clusters", id_cols = "gene", values_from = "mean_expression") %>% 
+  column_to_rownames("gene") %>% 
+  as.matrix() %>% 
+  t() %>% 
+  scale() %>% 
+  t()
+
+col_fun = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+mg_cluster_hm = Heatmap(matrix = mg_cluster_mat,
+                        top_annotation = ha,
+                        cluster_rows = TRUE,
+                        cluster_columns = TRUE,
+                        show_column_names = TRUE,
+                        clustering_method_rows = "ward.D2",
+                        clustering_method_columns = "ward.D2",
+                        col = col_fun,
+                        column_names_rot = 45,
+                        heatmap_legend_param = list(title = "z-Normalized\nExpression", at = -3:3))
+
+pdf([REDACTED_FILE_PATH]
+    width = 9,
+    height = 6)
+mg_cluster_hm
+dev.off()
+
+mg_cluster_hm
+```   
+
+```{r}
+mg_anno = read_excel([REDACTED_FILE_PATH] %>% 
+  dplyr::mutate(seurat_clusters = factor(seurat_clusters))
+tmp = microglia@meta.data %>% 
+  left_join(., mg_anno) %>% 
+  dplyr::select(celltype, subtype, notes)
+
+microglia = AddMetaData(microglia, tmp)
+rm(tmp)
+```
+
+```{r}
+lymphocytes = subset(complete, subset = seurat_clusters %in% c(10, 25, 32, 36, 54)) 
+lymphocytes = PrepSCTFindMarkers(lymphocytes)
+lymphocytes = RunPCA(lymphocytes, npcs = 50, features = rownames(lymphocytes))
+ElbowPlot(lymphocytes, ndims = 50)
+```   
+
+```{r warning=FALSE,}
+lymphocytes = RunUMAP(lymphocytes, dims = 1:23)
+lymphocytes = FindNeighbors(lymphocytes, reduction = "pca", dims = 1:23)
+lymphocytes = FindClusters(lymphocytes, resolution = 0.8, algorithm = 1, method = "igraph")
+```
+
+```{r}
+lymphocyte_markers = FindAllMarkers(lymphocytes, only.pos = TRUE, max.cells.per.ident = 10e3, recorrect_umi = FALSE)
+write_csv(lymphocyte_markers, [REDACTED_FILE_PATH]
+UMAPPlot(lymphocytes, label = TRUE) +
+  theme(legend.position = "none")
+ImageDimPlot(lymphocytes, fov = "combined", flip_xy = FALSE)
+FeaturePlot(lymphocytes, features = c("Cd3e", "Cd8b1", "Cd19", "Cd68", "Mki67"))
+```  
+
+```{r}
+lymph_anno = read_excel([REDACTED_FILE_PATH] %>% 
+  dplyr::mutate(seurat_clusters = factor(seurat_clusters))
+tmp = lymphocytes@meta.data %>% 
+  left_join(., lymph_anno) %>% 
+  dplyr::select(celltype, subtype, notes)
+
+lymphocytes = AddMetaData(lymphocytes, tmp)
+rm(tmp)
+```
+
+```{r eval=FALSE}
+pdf([REDACTED_FILE_PATH]
+    width = 24,
+    height = 12)
+
+for(cluster in sort(unique(complete$seurat_clusters))) {
+  
+  print(paste("Cluster:", cluster))
+        
+  out = ImageDimPlot(complete, 
+                     cells = WhichCells(complete, idents = cluster),
+                     fov = "combined", cols = "white",
+                     size = 0.5, flip_xy = FALSE)
+ plot(out)
+}
+
+dev.off()
+```
+
+```{r message=FALSE}
+wm_files = list.files([REDACTED_FILE_PATH]
+                      pattern = "WM_\\d_cells_stats",
+                      full.names = TRUE)
+wm = lapply(wm_files, function(file){
+  sample = substring(basename(file), 1, regexpr("_WM", basename(file)) - 1)
+  cells = read_csv(file, skip = 2) %>% 
+    .$`Cell ID` %>% 
+    paste(sample, ., sep = "_")
+  return(cells) }) %>% 
+  unlist()
+
+parenchyma_files = list.files([REDACTED_FILE_PATH]
+                      pattern = "_parenchyma_cells_stats",
+                      full.names = TRUE)
+parenchyma = lapply(parenchyma_files, function(file){
+  sample = substring(basename(file), 1, regexpr("_parenchyma", basename(file)) - 1)
+  cells = read_csv(file, skip = 2) %>% 
+    .$`Cell ID` %>% 
+    paste(sample, ., sep = "_")
+  return(cells) }) %>% 
+  unlist()
+
+tmp = data.frame(parenchymal = factor(ifelse(colnames(complete) %in% parenchyma,
+                                             yes = "Parenchymal",
+                                             no = "Non-Parenchymal")),
+                 tissue_type = factor(case_when(colnames(complete) %in% parenchyma & colnames(complete) %in% wm ~ "White Matter",
+                                                colnames(complete) %in% parenchyma & !(colnames(complete) %in% wm) ~ "Gray Matter",
+                                                .default = NA)))
+complete = AddMetaData(complete, tmp)
+rm(tmp)
+```
+
+```{r}
+annotations = read_excel([REDACTED_FILE_PATH] %>% 
+  dplyr::mutate(seurat_clusters = factor(seurat_clusters))
+
+tmp = complete@meta.data %>%   
+  dplyr::select(seurat_clusters) %>% 
+  rownames_to_column("cell") %>% 
+  left_join(., annotations) %>% 
+  column_to_rownames("cell")
+
+#add in microglia and lymphocyte subclusters
+subs = rbind(microglia@meta.data, lymphocytes@meta.data)
+tmp[rownames(subs), "celltype"] = subs$celltype
+tmp[rownames(subs), "subtype"] = subs$subtype
+tmp[rownames(subs), "notes"] = subs$notes
+
+tmp = tmp %>% 
+  dplyr::mutate(typestate = factor(ifelse(is.na(subtype),
+                                         yes = celltype,
+                                         no = paste(celltype, subtype, sep = ", "))),
+                celltype = factor(celltype),
+                subtype = factor(subtype)) %>% 
+  dplyr::select(celltype, subtype, typestate, notes)
+
+complete = AddMetaData(complete, tmp)
+
+Idents(complete) = complete$typestate
+
+#remove "bad" clusters
+complete$notes = replace_na(complete$notes, "")
+complete = subset(complete, notes != "REMOVE")
+dim(complete)
+```
+
+```{r}
+distribution_patchwork = ImageDimPlot(complete, 
+                     group.by = "typestate", 
+                     fov = "combined", 
+                     cols = nejm_pal, 
+                     dark.background = F,
+                     size = 0.8,
+                     crop = T, 
+                     axes = T,
+                     cells = WhichCells(complete, idents = c("Microglia, DAM", "Microglia, Interferon-Responsive", "CD8+ T Cells")), 
+                     flip_xy = FALSE)
+
+png([REDACTED_FILE_PATH]
+    res = 300,
+    width = 24,
+    height = 12,
+    units = "in")
+distribution_patchwork
+dev.off()
+
+pdf([REDACTED_FILE_PATH]
+    width = 24,
+    height = 12)
+distribution_patchwork
+dev.off()
+```
+
+```{r eval=FALSE}
+Idents(complete) = complete$typestate
+complete@misc$markers = FindAllMarkers(complete, only.pos = T, max.cells.per.ident = 10e3, random.seed = 12345)
+
+saveRDS(complete, [REDACTED_FILE_PATH]
+pbPost(body = "object exported")
+```   
+
+```{r eval=FALSE}
+cellbrowser_export_seurat5(obj = complete,
+                           fov = "combined", 
+                           assay = "Xenium",
+                           dataset_name = "Mouse Aging Brain Spatial",
+                           short_name = "mouse_aging_brain_spatial", 
+                           cluster_col = "typestate", 
+                           outdir = [REDACTED_FILE_PATH] 
+                           compress_directory = TRUE,
+                           delete_files = TRUE)
+```
+
+```{bash eval=FALSE}
+#need deploy user for cbBuild
+ssh [REDACTED_EMAIL_URL]
+screen
+
+#transfer object over from Quest and unpack
+mkdir [REDACTED_FILE_PATH]
+scp [REDACTED_EMAIL_URL]:[REDACTED_FILE_PATH] \
+[REDACTED_FILE_PATH]
+
+cd [REDACTED_FILE_PATH]
+tar -xzf mouse_aging_brain_spatial.tar.gz
+
+#annotate marker genes
+cbMarkerAnnotate markers.tsv markers_annotated.csv
+rm markers.tsv
+mv markers_annotated.csv markers.tsv
+
+cbBuild --init
+
+#move unpacked folder into production
+cbBuild -i cellbrowser.conf -o [REDACTED_FILE_PATH]
+
+#clean up
+rm -r [REDACTED_FILE_PATH]
+
+#remember to update [REDACTED_FILE_PATH]
+```   
+
+```{r}
+brain_dirs_baysor = list.dirs([REDACTED_FILE_PATH]
+                              recursive = FALSE)
+brain_dirs_baysor = brain_dirs_baysor[grepl("Rogan_output-X", brain_dirs_baysor)]
+tmp = basename(brain_dirs_baysor)
+brain_dirs_baysor = paste0(brain_dirs_baysor, "/outs/Baysor_legacy_0pt5/Resegmentation_0pt5/outs/")
+names(brain_dirs_baysor) = tmp
+
+for(i in 1:length(brain_dirs_baysor)){
+  sample = names(brain_dirs_baysor)[i]
+  f = brain_dirs_baysor[i]
+  file.copy(from = paste0(f, 
+                          "transcripts.parquet"),
+            to = paste0([REDACTED_FILE_PATH]
+                        sample,
+                        "_",
+                        "transcripts.parquet"))
+  file.copy(from = paste0(f, 
+                          "morphology.ome.tif"),
+            to = paste0([REDACTED_FILE_PATH]
+                        sample,
+                        "_",
+                        "morphology.ome.tif"))
+}
+```
+
+```{r}
+md_minimal = data.frame(sample = factor(c("Rogan_output-XETG00190__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__193909", 
+                                          "Rogan_output-XETG00190__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__193909",
+                                          "Rogan_output-XETG00191__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__181046",
+                                          "Rogan_output-XETG00191__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__181046")),
+                        mouse = factor(c("5010_3", "5007_2", "5007_1", "5010_2")),
+                        age_group = factor(c("Old", "Young", "Young", "Old")),
+                        age_months = factor(c("18mo", "4mo", "4mo", "18mo")),
+                        sex = factor(rep("Male", 4)))
+
+geo_md = data.frame(filepath = list.files([REDACTED_FILE_PATH]
+                    pattern = "ome\\.tif|parquet|rds$",
+                    full.names = TRUE)) %>% 
+  dplyr::mutate(file = basename(filepath),
+                sample = gsub("_morphology.ome.tif|_transcripts.parquet", "", file),
+                md5sum = tools::md5sum(filepath)) %>% 
+  left_join(., md_minimal)
+
+write_csv(geo_md, [REDACTED_FILE_PATH]
+```
+
+```{bash eval=FALSE}
+ln -s [REDACTED_FILE_PATH] \
+[REDACTED_FILE_PATH]
+```

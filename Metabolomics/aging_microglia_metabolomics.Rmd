@@ -1,0 +1,552 @@
+```{r setupy}
+library(tidyverse)
+library(ComplexHeatmap)
+library(ggsci)
+library(ggsignif)
+library(readxl)
+library(ggrepel)
+library(MetaboAnalystR)
+library(gatom)
+library(mwcsr)
+library(biomaRt)
+library(pathview)
+
+pal = pal_npg()(8)
+age_pal = c("Young" = pal[2],
+            "Old" = pal[1])
+```
+
+```{r}
+tics = read_excel([REDACTED_FILE_PATH]
+                  n_max = 1) %>% 
+  as.numeric() %>% 
+  .[3:length(.)]
+
+tic_factors = tics / min(tics[c(2:6, 8:12)])
+                  
+pd = read_excel([REDACTED_FILE_PATH] 
+                skip = 11) %>% 
+  dplyr::select(-`KEGG ID`) %>% 
+  column_to_rownames("...1") %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Sample") %>% 
+  #set zeros to NA
+  dplyr::mutate(across(.cols = 2:ncol(.), .fns = function(col){
+    col = as.numeric(col)
+    return(na_if(x = col, 0)) })) %>% 
+  dplyr::mutate(group = c("Blank", 
+                          "Young", "Old", "Young", "Old", "Young",
+                          "Blank",
+                          "Old", "Young", "Old", "Young", "Old",
+                          "Blank"),
+                cells_per_ul = c(0, 
+                                 5.4e3, 5.5e3, 5416.667, 5333.333, 5333.333,
+                                 0,
+                                 5.5e3, 5.5e3, 2857.143, 5571.429, 3214.286,
+                                 0)) %>% 
+  dplyr::mutate(scaling_factor = tic_factors) %>% 
+  dplyr::mutate(across(.cols = 2:(ncol(.) - 3), .fns = function(col){
+                  return(col / scaling_factor) })) %>% 
+  dplyr::relocate(Sample, group, cells_per_ul, scaling_factor) %>% 
+    dplyr::filter(group != "Blank") %>% 
+  dplyr::select(-c(cells_per_ul, scaling_factor)) 
+
+write.csv(pd, [REDACTED_FILE_PATH]
+          row.names = F)
+
+pd_long = pd %>% 
+  pivot_longer(cols = 3:ncol(.),
+               names_to = "analyte",
+               values_to = "ion_counts") %>% 
+  dplyr::rename(sample = Sample) %>% 
+  dplyr::mutate(sample = factor(sample),
+                group = factor(group),
+                analyte = factor(analyte))
+
+md = pd %>% 
+  dplyr::select(sample = Sample, group)
+```
+
+```{r}
+detection_sum = pd_long %>% 
+  group_by(analyte) %>% 
+  dplyr::summarize(mean_ion_counts = mean(ion_counts, na.rm = TRUE),
+                   CV = sd(ion_counts, na.rm = TRUE) /
+                     mean(ion_counts, na.rm = TRUE),
+                   pct_detected = sum(!(is.na(ion_counts))) / n() * 100)
+
+ggplot(detection_sum, aes(x = mean_ion_counts, y = CV)) +
+  geom_point(alpha = 0.7) +
+  geom_density2d() +
+  scale_x_log10() +
+  geom_rug(alpha = 0.1)
+
+ggplot(detection_sum, aes(x = pct_detected, y = CV)) +
+  geom_point(alpha = 0.7) +
+  geom_rug(alpha = 0.1)
+
+ggplot(detection_sum, aes(x = mean_ion_counts, y = pct_detected, color = log10(mean_ion_counts))) +
+  geom_point(alpha = 0.7) +
+  scale_x_log10() +
+  scale_color_viridis_b(option = "D") +
+  geom_text_repel(aes(label = analyte), max.overlaps = 5) +
+  geom_hline(yintercept = 50, linetype = 2)
+```   
+
+```{r}
+good_analytes = detection_sum %>% 
+  dplyr::filter(pct_detected > 50) %>% 
+  .$analyte
+
+pd_long = pd_long %>% 
+  dplyr::filter(analyte %in% good_analytes) %>% 
+  #refactor
+  dplyr::mutate(analyte = factor(as.character(analyte)))
+```
+
+```{r}
+complete_analytes = detection_sum %>% 
+  dplyr::filter(pct_detected == 100) %>% 
+  .$analyte
+
+complete_pca_mat = pd_long %>% 
+  dplyr::filter(analyte %in% complete_analytes) %>% 
+  dplyr::select(sample, analyte, ion_counts) %>% 
+  pivot_wider(names_from = analyte, values_from = ion_counts) %>% 
+  column_to_rownames("sample") %>% 
+  as.matrix()
+
+
+
+complete_pca = prcomp(x = complete_pca_mat, 
+                      center = TRUE,
+                      scale = TRUE)
+percentVar = complete_pca$sdev^2 / sum(complete_pca$sdev^2) * 100
+
+pca_data = complete_pca$x[, 1:3] %>% 
+  as.data.frame() %>% 
+  rownames_to_column("sample") %>% 
+  left_join(md)
+
+loadings = complete_pca$rotation %>% 
+      as.data.frame() %>% 
+      arrange(desc(PC1))
+
+ggplot(pca_data, aes(x = PC1, y = PC2, color = group)) +
+  geom_point(size = 3) +
+  geom_text_repel(aes(label = sample)) +
+  xlab(paste0("PC1: ",round(percentVar[1]),"% variance explained")) +
+    ylab(paste0("PC2: ",round(percentVar[2]),"% variance explained")) +
+  theme_bw() +
+  scale_color_nejm()
+```   
+
+```{r eval=FALSE}
+#detected analytes ultimately did not change
+
+complete_pca_mat = pd_long %>% 
+  dplyr::filter(analyte %in% complete_analytes) %>% 
+  dplyr::select(sample, analyte, ion_counts) %>% 
+  pivot_wider(names_from = analyte, values_from = ion_counts) %>% 
+  column_to_rownames("sample") %>% 
+  as.matrix()
+
+
+
+complete_pca = prcomp(x = complete_pca_mat, 
+                      center = TRUE,
+                      scale = TRUE)
+percentVar = complete_pca$sdev^2 / sum(complete_pca$sdev^2) * 100
+
+pca_data = complete_pca$x[, 1:3] %>% 
+  as.data.frame() %>% 
+  rownames_to_column("sample") %>% 
+  left_join(md)
+
+ggplot(pca_data, aes(x = PC1, y = PC2, color = group)) +
+  geom_point(size = 3) +
+  geom_text_repel(aes(label = sample)) +
+  xlab(paste0("PC1: ",round(percentVar[1]),"% variance explained")) +
+    ylab(paste0("PC2: ",round(percentVar[2]),"% variance explained")) +
+  theme_bw() +
+  scale_color_nejm()
+```   
+
+```{r}
+ggplot(pd_long, aes(x = ion_counts)) +
+  geom_histogram() +
+  facet_wrap(~analyte, scales = "free_x") +
+  theme_bw()
+```
+
+```{r}
+shaps = pd_long %>% 
+  group_by(analyte) %>% 
+  dplyr::summarize(pval = tryCatch(
+    {
+      shapiro.test(x = ion_counts)$p.value
+    },
+    error = function(cond) {
+      message("Skipped")
+      NA_real_
+    })) %>% 
+  ungroup() %>% 
+  dplyr::mutate(sig = pval < 0.05)
+```
+
+```{r}
+analyte_comps = pd_long %>% 
+  group_by(analyte) %>% 
+  dplyr::summarize(pval = tryCatch(
+    {
+      wilcox.test(ion_counts ~ group, cur_data())$p.value
+    },
+    error = function(cond) {
+      message("Skipped")
+      NA_real_
+    }),
+    mean_young = mean(subset(pick(group, ion_counts), group == "Young")$ion_counts, na.rm = TRUE),
+    mean_old = mean(subset(pick(group, ion_counts), group == "Old")$ion_counts, na.rm = TRUE),
+    baseMean = mean(ion_counts, na.rm = TRUE),
+    log2FoldChange = log2(mean_old / mean_young)) %>% 
+  ungroup() %>% 
+  dplyr::filter(!is.na(pval)) %>% 
+  dplyr::mutate(padj = p.adjust(pval, method = "fdr"))
+```
+
+```{r}
+sig_analytes = analyte_comps %>% 
+  dplyr::filter(pval < 0.05) %>% 
+  .$analyte
+
+mat = pd_long %>% 
+  dplyr::filter(analyte %in% sig_analytes) %>% 
+  dplyr::select(sample, analyte, ion_counts) %>% 
+  pivot_wider(names_from = analyte, values_from = ion_counts) %>% 
+  column_to_rownames("sample") %>% 
+  as.matrix() %>% 
+  scale() %>% 
+  t()
+
+age_anno = md %>% 
+  column_to_rownames("sample") %>% 
+  dplyr::rename(Age = group) %>% 
+  HeatmapAnnotation(df = ., col = list("Age" = c("Old" = pal[1],
+                                                 "Young" = pal[2])),
+                       simple_anno_size = unit(1, "cm"), 
+                       annotation_name_gp =  gpar(fontsize = 20, fontface = "bold"),
+                       annotation_legend_param = list(title_gp = gpar(fontsize = 24, fontface = "bold"),
+                                                      labels_gp = gpar(fontsize = 18),
+                                                      legend_gp = gpar(fontsize = 18),
+                                                      grid_height = unit(1, "cm"), 
+                                                      grid_width = unit(1, "cm"),
+                                                      legend_height = unit(3, "cm")))
+
+color_fun = circlize::colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+
+#need to add annotation and clean up this plot 2022-05-08
+sig_hm = Heatmap(matrix = mat,
+        name = "z-Normalized AUC",
+        cluster_rows = T,
+        cluster_columns = T,
+        clustering_distance_rows = "euclidean",
+        clustering_distance_columns = "euclidean",
+        clustering_method_columns = "ward.D2",
+        clustering_method_rows = "ward.D2",
+        top_annotation = age_anno,
+        show_column_names = F,
+        col = color_fun,
+        row_names_gp = gpar(fontsize = 18),
+        column_title_gp = gpar(fontsize = 24, fontface = "bold"),
+        heatmap_legend_param = list(title = "z-Normalized\nAbundance",
+                                    at = -3:3,
+                                    direction = "horizontal",
+                                    title_position = "topcenter",
+                                    title_gp = gpar(fontsize = 20, fontface = "bold"),
+                                    labels_gp = gpar(fontsize = 18),
+                                    grid_height = unit(0.5, "cm"), 
+                                    grid_width = unit(0.5, "cm")))
+
+cairo_pdf(file = [REDACTED_FILE_PATH]
+         width = 5,
+         height = 5,
+         family = "Arial")
+draw(sig_hm, 
+           annotation_legend_side = "bottom", 
+           heatmap_legend_side = "bottom",
+           merge_legend = TRUE)
+dev.off()
+
+saveRDS(sig_hm,  [REDACTED_FILE_PATH]
+
+sig_hm
+```
+
+```{r}
+ratios = pd %>% 
+  dplyr::mutate(lactate_over_pyruvate = `lactic acid` / `pyruvic acid`,
+                   itaconate_over_aKG = `itaconic acid` / `a-KG`,
+                   succinate_over_aKG = `succinic acid`/ `a-KG`,
+                   fumarate_over_aKG = `fumaric acid`/ `a-KG`,
+                   twoHG_over_aKG = `2-HG`/ `a-KG`) %>% 
+  dplyr::select(Sample, group, contains("_over_")) %>% 
+  pivot_longer(cols = contains("_over_"),
+               names_to = "ratio") %>% 
+  dplyr::mutate(group = factor(group, levels = c("Young", "Old")))
+```
+
+```{r}
+#not normal
+ggplot(ratios, aes(x = value)) +
+  facet_wrap(~ ratio, scales = "free") +
+  geom_histogram()
+
+ratio_comps = ratios %>% 
+  group_by(ratio) %>% 
+  dplyr::summarize(pval = wilcox.test(value ~ group, cur_data())$p.value) %>% 
+  ungroup() %>% 
+  dplyr::mutate(padj = p.adjust(pval, method = "fdr"),
+                group1 = "Young",
+                group2 = "Old",
+                annot = format(padj, digits = 2, scientific = T))
+
+ratio_comps
+```   
+
+```{r}
+itaconate_boxplot = ratios %>% 
+  dplyr::filter(ratio == "itaconate_over_aKG") %>% 
+  ggplot(aes(x = group, y = value, fill = group)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.2) +
+  theme_bw() +
+  scale_fill_manual(values = age_pal) +
+  labs(x = "", y = "Itaconate / α-ketoglutarate Ratio") +
+  # geom_signif(inherit.aes = F,
+  #             data = subset(ratio_comps, ratio == "itaconate_over_aKG"),
+  #             aes(xmin = group1, xmax = group2, annotations = annot, y_position = 7),
+  #             tip_length = 0,
+  #             manual=TRUE) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        axis.title.y =  element_text(size = 14))
+
+saveRDS(itaconate_boxplot,  [REDACTED_FILE_PATH]
+
+itaconate_boxplot
+```
+
+```{r eval=FALSE}
+#kegg IDs are safer
+metabolite_conv = read_excel([REDACTED_FILE_PATH] 
+                skip = 11, 
+                na = c("", "n/a", "NA", "na")) %>% 
+  dplyr::select(analyte = 1, kegg_id = 2)
+
+hits = metabolite_conv %>% 
+  dplyr::filter(analyte %in% sig_analytes) %>% 
+  .$kegg_id %>% 
+  str_split(., pattern = " / ") %>% 
+  unlist()
+
+metabolome = metabolite_conv %>% 
+  dplyr::filter(analyte %in% good_analytes) %>% 
+  .$kegg_id %>% 
+  str_split(., pattern = " / |/|-") %>% 
+  unlist() %>% 
+  .[!is.na(.) & !grepl("^[na]", .)]
+
+write.table(metabolome, [REDACTED_FILE_PATH] 
+            quote = F,
+            row.names = F, 
+            col.names = F)
+
+mset = InitDataObjects(data.type = "conc", 
+                       anal.type = "msetora", 
+                       paired = FALSE)
+mset = Setup.MapData(mSetObj = mset, qvec = hits)
+mset = CrossReferencing(mSetObj = mset, q.type = "kegg")
+mset = CreateMappingResultTable(mSetObj = mset)
+mset = Setup.KEGGReferenceMetabolome(mSetObj = mset, [REDACTED_FILE_PATH]
+mset = SetMetabolomeFilter(mSetObj = mset, TorF = T)
+mset = SetCurrentMsetLib(mSetObj = mset, libname = "kegg_pathway", excludeNum = 2)
+mset = CalculateHyperScore(mSetObj = mset)
+mset = PlotORA(mSetObj = mset, "ora_0_", "net", "png", 300, width=NA)
+mset = PlotEnrichDotPlot(mset, "ora", "ora_dot_0_", "png", 300, width=NA)
+```   
+
+```{r}
+metabolite_conv = read_excel([REDACTED_FILE_PATH] 
+                skip = 11, 
+                na = c("", "n/a", "NA", "na")) %>% 
+  dplyr::select(analyte = 1, kegg_id = 2)
+
+hits = analyte_comps %>% 
+  dplyr::filter(pval < 0.05) %>% 
+  left_join(., metabolite_conv) %>% 
+  dplyr::mutate(kegg_id = trimws(gsub("n/a / | / n/a", "", kegg_id))) %>% 
+  dplyr::filter(!is.na(kegg_id)) %>% 
+  separate_longer_delim(kegg_id, delim = stringr::regex("/|-")) %>% 
+  dplyr::mutate(kegg_id = trimws(kegg_id))
+
+hits_up = subset(hits, log2FoldChange > 0)
+hits_down = subset(hits, log2FoldChange < 0)
+
+#export universe
+all_metabolites = metabolite_conv %>% 
+  plyr::mutate(kegg_id = trimws(gsub("n/a / | / n/a", "", kegg_id))) %>% 
+  dplyr::filter(!is.na(kegg_id)) %>% 
+  separate_longer_delim(kegg_id, delim = stringr::regex("/|-")) %>% 
+  dplyr::mutate(kegg_id = trimws(kegg_id)) %>% 
+  .$kegg_id
+writeLines(all_metabolites,
+            sep = "\n",
+            con = [REDACTED_FILE_PATH]
+
+cat(hits_down$kegg_id, sep = "\n")
+```
+
+```{r}
+network.kegg = readRDS([REDACTED_FILE_PATH]
+org.Mm.eg.gatom.anno = readRDS([REDACTED_FILE_PATH]
+met.kegg.db = readRDS([REDACTED_FILE_PATH]
+
+bulk_rna_aging = read.csv([REDACTED_FILE_PATH] %>% 
+  dplyr::select(-X) %>% 
+  dplyr::rename(ID = row.names) %>% 
+  dplyr::arrange(pvalue) 
+
+write_csv(bulk_rna_aging, [REDACTED_FILE_PATH]
+
+metabo_dea = analyte_comps %>% 
+  left_join(., metabolite_conv) %>% 
+  dplyr::rename(ID = kegg_id) %>% 
+  dplyr::mutate(ID = trimws(gsub("n/a / | / n/a", "", ID))) %>% 
+  dplyr::filter(!is.na(ID)) %>% 
+  separate_longer_delim(ID, delim = stringr::regex("/|-")) %>% 
+  dplyr::mutate(ID = trimws(ID))
+```
+
+```{r}
+graph = makeMetabolicGraph(network = network.kegg,
+                        topology = "atoms",
+                        org.gatom.anno = org.Mm.eg.gatom.anno,
+                        gene.de = bulk_rna_aging,
+                        met.db = met.kegg.db,
+                        met.de = metabo_dea)
+```
+
+```{r}
+graph_score = scoreGraph(graph, 
+                         k.gene = 50, 
+                         k.met = 50, 
+                         edge.threshold.min = 0.05,
+                         vertex.threshold.min = 0.05)
+solver = virgo_solver(cplex_bin = [REDACTED_FILE_PATH]
+                      cplex_jar = [REDACTED_FILE_PATH]
+                      penalty=0.01, timelimit=240, threads=4)
+gatom_res = solve_mwcsp(solver, graph_score)
+module = gatom_res$graph
+
+saveModuleToPdf(module, 
+                file=[REDACTED_FILE_PATH] 
+                name="Old vs Young Microglia", 
+                n_iter=100, 
+                force=1e-5)
+saveModuleToHtml(module, 
+                file=[REDACTED_FILE_PATH] 
+                name="Old vs Young Microglia")
+
+plot(module)
+```   
+
+```{r}
+mouse_mart = useMart("ensembl", "mmusculus_gene_ensembl")
+entrez_conv = getBM(attributes = c("ensembl_gene_id", "entrezgene_id"),
+                    mart = mouse_mart)
+
+# DEA from bulk RNA-seq experiments
+fc_dea = bulk_rna_aging %>% 
+  left_join(., entrez_conv, by = c("ID" = "ensembl_gene_id")) %>% 
+  dplyr::filter(!(is.na(entrezgene_id)))  
+fc = fc_dea$log2FoldChange
+names(fc) = fc_dea$entrezgene_id
+
+# metabolomics
+fc_metabo = metabo_dea$log2FoldChange
+names(fc_metabo) = metabo_dea$ID
+```   
+
+```{r}
+setwd([REDACTED_FILE_PATH]
+pathview(gene.data = fc, 
+         cpd.data = fc_metabo,
+         cpd.idtype = "kegg",
+         pathway.id = "mmu00010",
+         same.layer = FALSE,
+         map.symbol = TRUE,
+         low = list(gene = "dodgerblue2", cpd = "dodgerblue2"),
+         mid = list(gene = "white", cpd = "white"),
+         high = list(gene = "firebrick2", cpd = "firebrick2"),
+         species = "mmu",
+         discrete = list(gene = F, cpd = F),
+         limit = list(gene = 2, cpd = 2),
+         bins = list(gene = 12, cpd = 12),
+         kegg.native = T)
+```     
+
+```{r}
+setwd([REDACTED_FILE_PATH]
+pathview(gene.data = fc, 
+         cpd.data = fc_metabo, 
+         cpd.idtype = "kegg",
+         pathway.id = "mmu00020",
+         same.layer = FALSE,
+         map.symbol = TRUE,
+         low = list(gene = "dodgerblue2", cpd = "dodgerblue2"),
+         mid = list(gene = "white", cpd = "white"),
+         high = list(gene = "firebrick2", cpd = "firebrick2"),
+         species = "mmu",
+         discrete = list(gene = F, cpd = F),
+         limit = list(gene = 2, cpd = 2),
+         bins = list(gene = 12, cpd = 12),
+         kegg.native = T)
+```   
+
+```{r}
+setwd([REDACTED_FILE_PATH]
+pathview(gene.data = fc, 
+         cpd.data = fc_metabo,
+         cpd.idtype = "kegg",
+         pathway.id = "mmu00220",
+         same.layer = FALSE,
+         map.symbol = TRUE,
+         low = list(gene = "dodgerblue2", cpd = "dodgerblue2"),
+         mid = list(gene = "white", cpd = "white "),
+         high = list(gene = "firebrick2", cpd = "firebrick2"),
+         species = "mmu",
+         discrete = list(gene = F, cpd = F),
+         limit = list(gene = 2, cpd = 2),
+         bins = list(gene = 12, cpd = 12),
+         kegg.native = T)
+```  
+
+```{r}
+setwd([REDACTED_FILE_PATH]
+pathview(gene.data = fc, 
+         cpd.data = fc_metabo,
+         cpd.idtype = "kegg",
+         pathway.id = "mmu00561",
+         same.layer = FALSE,
+         map.symbol = TRUE,
+         low = list(gene = "dodgerblue2", cpd = "dodgerblue2"),
+         mid = list(gene = "white", cpd = "white "),
+         high = list(gene = "firebrick2", cpd = "firebrick2"),
+         species = "mmu",
+         discrete = list(gene = F, cpd = F),
+         limit = list(gene = 2, cpd = 2),
+         bins = list(gene = 12, cpd = 12),
+         kegg.native = T)
+```  

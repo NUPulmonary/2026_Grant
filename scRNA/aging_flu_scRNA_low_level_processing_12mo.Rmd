@@ -1,0 +1,1191 @@
+```{r setup}
+library(tidyverse)
+library(Seurat)
+library(tidyseurat)
+library(rtracklayer)
+library(Cairo)
+library(gridExtra)
+library(readxl)
+library(lubridate)
+library(RPushbullet)
+library(Seurat.utils)
+```   
+
+```{bash eval=FALSE}
+cd [REDACTED_FILE_PATH]
+
+#IAV GCF_[REDACTED_IDENTIFIER].1
+mkdir GCF_[REDACTED_IDENTIFIER].1
+cd GCF_[REDACTED_IDENTIFIER].1
+wget 'ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/001/343/785/GCF_[REDACTED_IDENTIFIER].1_ViralMultiSegProj274766/GCF_[REDACTED_IDENTIFIER].1_ViralMultiSegProj274766_genomic.fna.gz'
+wget 'ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/001/343/785/GCF_[REDACTED_IDENTIFIER].1_ViralMultiSegProj274766/GCF_[REDACTED_IDENTIFIER].1_ViralMultiSegProj274766_genomic.gff.gz'
+gunzip *.gz
+
+#GRCm38 (cellranger version 2020-A)
+cd [REDACTED_FILE_PATH]
+wget 'https://cf.10xgenomics.com/supp/cell-exp/refdata-gex-mm10-2020-A.tar.gz'
+tar -xf 'refdata-gex-mm10-2020-A.tar.gz'
+rm 'refdata-gex-mm10-2020-A.tar.gz'
+```   
+
+```{r}
+iav_gff = readGFF([REDACTED_FILE_PATH] 
+                   version = 3)
+iav_gff = subset(iav_gff, type == "gene") 
+export.gff3(iav_gff, 
+            [REDACTED_FILE_PATH]
+```   
+
+```{bash eval=FALSE}
+module load gffread/0.9.11
+
+gffread  \
+[REDACTED_FILE_PATH] \
+-T \
+-F \
+ --gene2exon \
+-o [REDACTED_FILE_PATH]
+```   
+
+```{bash eval=FALSE}
+#!/bin/bash
+#SBATCH -A [REDACTED_PROJECT_ALLOCATION]
+#SBATCH -p genomics
+#SBATCH -t 4:00:00
+#SBATCH -N 1
+#SBATCH --mem=48G
+#SBATCH --ntasks-per-node=12
+#SBATCH --mail-user=[REDACTED_EMAIL_URL]
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --job-name='[REDACTED_DATE_YYMMDD]mm10_IAV_mkref'
+
+module purge
+cd [REDACTED_FILE_PATH]
+
+[REDACTED_FILE_PATH] mkref \
+--genome 'GRCm38' \
+--fasta [REDACTED_FILE_PATH] \
+--genes [REDACTED_FILE_PATH] \
+--genome 'IAV_GCF_[REDACTED_IDENTIFIER].1' \
+--fasta [REDACTED_FILE_PATH] \
+--genes [REDACTED_FILE_PATH] \
+--nthreads 12 \
+--memgb 48
+```   
+
+```{bash eval=FALSE}
+cd [REDACTED_FILE_PATH]
+screen
+source [REDACTED_FILE_PATH]
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+mode='demult_only' \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 \
+-n
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+mode='demult_only' \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000
+```   
+
+```{bash eval=FALSE}
+cd [REDACTED_FILE_PATH]
+screen
+source [REDACTED_FILE_PATH]
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+mode='demult_only' \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 \
+-n
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+mode='demult_only' \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000
+```   
+
+```{bash eval=FALSE}
+#!/bin/bash
+#SBATCH -A [REDACTED_PROJECT_ALLOCATION]
+#SBATCH -p genomics
+#SBATCH -t 4:00:00
+#SBATCH -N 1
+#SBATCH --mem=48G
+#SBATCH --ntasks-per-node=16
+#SBATCH --mail-user=[REDACTED_EMAIL_URL]
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --job-name='[REDACTED_DATE_YYMMDD]batch3_novaseq_demult'
+
+module load bcl2fastq/2.20
+
+cd [REDACTED_FILE_PATH]
+bcl2fastq -r 4 -p 8 -w 4 \
+--sample-sheet [REDACTED_FILE_PATH] \
+--use-bases-mask y28n*,i10,i10n14,y90 \
+--create-fastq-for-index-reads \
+-o [REDACTED_FILE_PATH]
+```   
+
+```{bash eval=FALSE}
+cd [REDACTED_FILE_PATH]
+screen
+source [REDACTED_FILE_PATH]
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+mode='demult_only' \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 \
+-n
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+mode='demult_only' \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 
+```   
+
+```{bash eval=FALSE}
+#stick with GEX folder to match previous
+cd [REDACTED_FILE_PATH]
+screen
+source [REDACTED_FILE_PATH]
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+mode='demult_only' \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 \
+-n
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+mode='demult_only' \ 
+--cluster [REDACTED_FILE_PATH] \
+-j 1000
+```
+
+```{bash eval=FALSE}
+ln -s [REDACTED_FILE_PATH] \
+[REDACTED_FILE_PATH]
+```
+
+```{bash eval=FALSE}
+cd [REDACTED_FILE_PATH]
+screen
+source [REDACTED_FILE_PATH]
+
+#get all assigned fastqs 
+fastqs=[REDACTED_FILE_PATH] [REDACTED_FILE_PATH]
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+transcriptome=[REDACTED_FILE_PATH] \
+input_fastq_type='antibody' \
+antibodies=[REDACTED_FILE_PATH] \
+mode='complete' \
+gex_fastqs="$fastqs" \
+include_introns='False' \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 \
+-n
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+transcriptome=[REDACTED_FILE_PATH] \
+input_fastq_type='antibody' \
+antibodies=[REDACTED_FILE_PATH] \
+mode='complete' \
+gex_fastqs="$fastqs" \
+include_introns='False' \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000
+```   
+
+```{bash eval=FALSE}
+cd [REDACTED_FILE_PATH]
+screen
+source [REDACTED_FILE_PATH]
+
+#get all assigned fastqs 
+fastqs=[REDACTED_FILE_PATH] [REDACTED_FILE_PATH]
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+transcriptome=[REDACTED_FILE_PATH] \
+input_fastq_type='antibody' \
+antibodies=[REDACTED_FILE_PATH] \
+mode='complete' \
+gex_fastqs="$fastqs" \
+include_introns='False' \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 \
+-n
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+transcriptome=[REDACTED_FILE_PATH] \
+input_fastq_type='antibody' \
+antibodies=[REDACTED_FILE_PATH] \
+mode='complete' \
+gex_fastqs="$fastqs" \
+include_introns='False' \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000
+```   
+
+```{bash eval=FALSE}
+cd [REDACTED_FILE_PATH]
+screen
+source [REDACTED_FILE_PATH]
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+transcriptome=[REDACTED_FILE_PATH] \
+input_fastq_type='gex+antibody' \
+antibodies=[REDACTED_FILE_PATH] \
+mode='manual_demult' \
+include_introns='False' \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 \
+-n
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--config sample_csv_path=[REDACTED_FILE_PATH] \
+data_dir=[REDACTED_FILE_PATH] \
+cellranger_dir=[REDACTED_FILE_PATH] \
+transcriptome=[REDACTED_FILE_PATH] \
+input_fastq_type='gex+antibody' \
+antibodies=[REDACTED_FILE_PATH] \
+mode='manual_demult' \
+include_introns='False' \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000
+```
+
+```{python eval=FALSE}
+import scrublet as scr
+import scipy.io
+import os
+import gzip
+import pandas as pd
+import matplotlib.pyplot as plt
+import subprocess
+
+EXPECTED_DOUBLET_RATE = {
+  "SC574": 0.16,
+  "SC575": 0.16,
+  "SC576": 0.14,
+  "SC577": 0.14,
+  "SC578": 0.20,
+  "SC579": 0.20,
+  "SC596": 0.14,
+  "SC597": 0.07,
+  "SC598": 0.20,
+  "SC599": 0.20,
+  }
+
+CUTOFFS = {
+  "SC574": 0.40,
+  "SC575": 0.40,
+  "SC576": 0.36,
+  "SC577": 0.40,
+  "SC578": 0.40,
+  "SC579": 0.40,
+  "SC596": 0.36,
+  "SC597": 0.25,
+  "SC598": 0.40,
+  "SC599": 0.40,
+  }
+
+rule all:
+  input:
+    expand([REDACTED_FILE_PATH] sample=["SC574", "SC575", "SC576", "SC577", "SC578", "SC579", "SC596", "SC597", "SC598", "SC599"]),
+    expand([REDACTED_FILE_PATH] sample=["SC574", "SC575", "SC576", "SC577", "SC578", "SC579", "SC596", "SC597", "SC598", "SC599"]),
+    expand([REDACTED_FILE_PATH] sample=["SC574", "SC575", "SC576", "SC577", "SC578", "SC579", "SC596", "SC597", "SC598", "SC599"]),
+    expand([REDACTED_FILE_PATH] sample=["SC574", "SC575", "SC576", "SC577", "SC578", "SC579", "SC596", "SC597", "SC598", "SC599"])
+
+rule scrublet:
+  input:
+    [REDACTED_FILE_PATH]
+    [REDACTED_FILE_PATH]
+  output:
+    [REDACTED_FILE_PATH]
+    [REDACTED_FILE_PATH]
+    [REDACTED_FILE_PATH]
+    [REDACTED_FILE_PATH]
+    
+  params:
+    slurm__hours=1,
+    slurm__cores=1,
+    slurm__mem=8,
+    edr = lambda wildcards, input: EXPECTED_DOUBLET_RATE.get(wildcards.sample),
+    cutoff = lambda wildcards, input: CUTOFFS.get(wildcards.sample)
+  run:
+    subprocess.run("module load gcc/11.2.0", shell=True)
+    counts_matrix = scipy.io.mmread(gzip.open(input[0])).T.tocsc()
+    barcodes = pd.read_table(gzip.open(input[1]), header=None)
+    scrub = scr.Scrublet(counts_matrix, expected_doublet_rate = params.edr)
+    doublet_scores, doublets = scrub.scrub_doublets(min_counts=2,
+                                                    min_cells=3,
+                                                    min_gene_variability_pctl=85,
+                                                    n_prin_comps=30)
+    
+    #just go with manual
+    scrub.call_doublets(threshold = params.cutoff)
+    
+    #output doublet scores
+    barcodes['doublet'] = doublet_scores
+    barcodes.to_csv(output[0])
+    
+    #output cutoffs (not important now that we did manually)
+    if not os.path.exists(output[1]):
+        with open(output[1], 'w') as f:
+            f.write(str(scrub.threshold_))
+            
+    #output theshold plot
+    scrub.plot_histogram()
+    plt.savefig(output[2])
+    
+    #output UMAP plot
+    scrub.set_embedding('UMAP', scr.get_umap(scrub.manifold_obs_, n_neighbors=10, min_dist=0.2, metric='cosine'))
+    scrub.plot_embedding('UMAP', order_points=True)
+    plt.savefig(output[3])
+```   
+
+```{bash eval=FALSE}
+cd [REDACTED_FILE_PATH]
+screen
+source [REDACTED_FILE_PATH]
+module purge all
+module load gcc/11.2.0 #required for annoy
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 \
+-F \
+-n
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 \
+-F
+```   
+
+```{python eval=FALSE}
+import scrublet as scr
+import scipy.io
+import os
+import gzip
+import pandas as pd
+import matplotlib.pyplot as plt
+import subprocess
+
+EXPECTED_DOUBLET_RATE = {
+  "SC616": 0.054,
+  "SC617": 0.048,
+  "SC618": 0.027,
+  "SC619": 0.078
+  }
+
+CUTOFFS = {
+  "SC616": 0.18,
+  "SC617": 0.16,
+  "SC618": 0.20,
+  "SC619": 0.22
+  }
+
+rule all:
+  input:
+    expand([REDACTED_FILE_PATH] sample=["SC616", "SC617", "SC618", "SC619"]),
+    expand([REDACTED_FILE_PATH] sample=["SC616", "SC617", "SC618", "SC619"]),
+    expand([REDACTED_FILE_PATH] sample=["SC616", "SC617", "SC618", "SC619"]),
+    expand([REDACTED_FILE_PATH] sample=["SC616", "SC617", "SC618", "SC619"])
+
+rule scrublet:
+  input:
+    [REDACTED_FILE_PATH]
+    [REDACTED_FILE_PATH]
+  output:
+    [REDACTED_FILE_PATH]
+    [REDACTED_FILE_PATH]
+    [REDACTED_FILE_PATH]
+    [REDACTED_FILE_PATH]
+    
+  params:
+    slurm__hours=1,
+    slurm__cores=1,
+    slurm__mem=8,
+    edr = lambda wildcards, input: EXPECTED_DOUBLET_RATE.get(wildcards.sample),
+    cutoff = lambda wildcards, input: CUTOFFS.get(wildcards.sample)
+  run:
+    subprocess.run("module load gcc/11.2.0", shell=True)
+    counts_matrix = scipy.io.mmread(gzip.open(input[0])).T.tocsc()
+    barcodes = pd.read_table(gzip.open(input[1]), header=None)
+    scrub = scr.Scrublet(counts_matrix, expected_doublet_rate = params.edr)
+    doublet_scores, doublets = scrub.scrub_doublets(min_counts=2,
+                                                    min_cells=3,
+                                                    min_gene_variability_pctl=85,
+                                                    n_prin_comps=30)
+    
+    #just go with manual
+    scrub.call_doublets(threshold = params.cutoff)
+    
+    #output doublet scores
+    barcodes['doublet'] = doublet_scores
+    barcodes.to_csv(output[0])
+    
+    #output cutoffs (not important now that we did manually)
+    if not os.path.exists(output[1]):
+        with open(output[1], 'w') as f:
+            f.write(str(scrub.threshold_))
+            
+    #output theshold plot
+    scrub.plot_histogram()
+    plt.savefig(output[2])
+    
+    #output UMAP plot
+    scrub.set_embedding('UMAP', scr.get_umap(scrub.manifold_obs_, n_neighbors=10, min_dist=0.2, metric='cosine'))
+    scrub.plot_embedding('UMAP', order_points=True)
+    plt.savefig(output[3])
+```   
+
+```{bash eval=FALSE}
+cd [REDACTED_FILE_PATH]
+screen
+source [REDACTED_FILE_PATH]
+module purge all
+module load gcc/11.2.0 #required for annoy
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 \
+-F \
+-n
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 \
+-F
+```   
+
+```{python eval=FALSE}
+import scrublet as scr
+import scipy.io
+import os
+import gzip
+import pandas as pd
+import matplotlib.pyplot as plt
+import subprocess
+
+EXPECTED_DOUBLET_RATE = {
+  "SC743": 0.10,
+  "SC744": 0.03,
+  "SC745": 0.053,
+  "SC746": 0.136,
+  "SC747": 0.136,
+  "SC748": 0.16,
+  "SC749": 0.16,
+  "SC750": 0.11,
+  "SC751": 0.11,
+  }
+
+CUTOFFS = {
+  "SC743": 0.30,
+  "SC744": 0.14,
+  "SC745": 0.22,
+  "SC746": 0.34,
+  "SC747": 0.32,
+  "SC748": 0.24,
+  "SC749": 0.32,
+  "SC750": 0.30,
+  "SC751": 0.30,
+  }
+
+rule all:
+  input:
+    expand([REDACTED_FILE_PATH] sample=["SC743", "SC744", "SC745", "SC746", "SC747", "SC748", "SC749", "SC750", "SC751"]),
+    expand([REDACTED_FILE_PATH] sample=["SC743", "SC744", "SC745", "SC746", "SC747", "SC748", "SC749", "SC750", "SC751"]),
+    expand([REDACTED_FILE_PATH] sample=["SC743", "SC744", "SC745", "SC746", "SC747", "SC748", "SC749", "SC750", "SC751"]),
+    expand([REDACTED_FILE_PATH] sample=["SC743", "SC744", "SC745", "SC746", "SC747", "SC748", "SC749", "SC750", "SC751"])
+
+rule scrublet:
+  input:
+    [REDACTED_FILE_PATH]
+    [REDACTED_FILE_PATH]
+  output:
+    [REDACTED_FILE_PATH]
+    [REDACTED_FILE_PATH]
+    [REDACTED_FILE_PATH]
+    [REDACTED_FILE_PATH]
+    
+  params:
+    slurm__hours=1,
+    slurm__cores=1,
+    slurm__mem=64,
+    edr = lambda wildcards, input: EXPECTED_DOUBLET_RATE.get(wildcards.sample),
+    cutoff = lambda wildcards, input: CUTOFFS.get(wildcards.sample)
+  run:
+    subprocess.run("module load gcc/11.2.0", shell=True)
+    counts_matrix = scipy.io.mmread(gzip.open(input[0])).T.tocsc()
+    barcodes = pd.read_table(gzip.open(input[1]), header=None)
+    scrub = scr.Scrublet(counts_matrix, expected_doublet_rate = params.edr)
+    doublet_scores, doublets = scrub.scrub_doublets(min_counts=2,
+                                                    min_cells=3,
+                                                    min_gene_variability_pctl=85,
+                                                    n_prin_comps=30)
+    
+    #just go with manual
+    scrub.call_doublets(threshold = params.cutoff)
+    
+    #output doublet scores
+    barcodes['doublet'] = doublet_scores
+    barcodes.to_csv(output[0])
+    
+    #output cutoffs (not important now that we did manually)
+    if not os.path.exists(output[1]):
+        with open(output[1], 'w') as f:
+            f.write(str(scrub.threshold_))
+            
+    #output theshold plot
+    scrub.plot_histogram()
+    plt.savefig(output[2])
+    
+    #output UMAP plot
+    scrub.set_embedding('UMAP', scr.get_umap(scrub.manifold_obs_, n_neighbors=10, min_dist=0.2, metric='cosine'))
+    scrub.plot_embedding('UMAP', order_points=True)
+    plt.savefig(output[3])
+```   
+
+```{bash eval=FALSE}
+cd [REDACTED_FILE_PATH]
+screen
+source [REDACTED_FILE_PATH]
+module purge all
+module load gcc/11.2.0 #required for annoy
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 \
+-F \
+-n
+
+snakemake -s [REDACTED_FILE_PATH] \
+--cluster-config [REDACTED_FILE_PATH] \
+--cluster [REDACTED_FILE_PATH] \
+-j 1000 \
+-F
+```  
+
+```{r}
+dub_files_b1 = list.files([REDACTED_FILE_PATH]
+                       pattern = "_doublets.csv",
+                       full.names = T)
+names(dub_files_b1) = basename(dub_files_b1) %>% 
+  substring(1, 5)
+dub_files_b2 = list.files([REDACTED_FILE_PATH]
+                       pattern = "_doublets.csv",
+                       full.names = T)
+names(dub_files_b2) = basename(dub_files_b2) %>% 
+  substring(1, 5)
+dub_files_b3 = list.files([REDACTED_FILE_PATH]
+                       pattern = "_doublets.csv",
+                       full.names = T)
+names(dub_files_b3) = basename(dub_files_b3) %>% 
+  substring(1, 5)
+dub_files = c(dub_files_b1, dub_files_b2, dub_files_b3)
+rm(dub_files_b1, dub_files_b2, dub_files_b3)
+
+threshold_files_b1 = list.files([REDACTED_FILE_PATH]
+                       pattern = "_threshold.txt",
+                       full.names = T)
+names(threshold_files_b1) = basename(threshold_files_b1) %>% 
+  substring(1, 5)
+threshold_files_b2 = list.files([REDACTED_FILE_PATH]
+                       pattern = "_threshold.txt",
+                       full.names = T)
+names(threshold_files_b2) = basename(threshold_files_b2) %>% 
+  substring(1, 5)
+threshold_files_b3 = list.files([REDACTED_FILE_PATH]
+                       pattern = "_threshold.txt",
+                       full.names = T)
+names(threshold_files_b3) = basename(threshold_files_b3) %>% 
+  substring(1, 5)
+threshold_files = c(threshold_files_b1, threshold_files_b2, threshold_files_b3)
+rm(threshold_files_b1, threshold_files_b2, threshold_files_b3)
+
+all(names(dub_files) == names(threshold_files)) #TRUE
+
+doublets = vector(mode = "list", length = length(dub_files))
+for(i in 1:length(dub_files))
+{
+  sample = names(dub_files)[i]
+  threshold = suppressWarnings(readLines(threshold_files[i])) %>% 
+    as.numeric()
+  dubs = read_csv(dub_files[i], 
+                  skip = 1,
+                  col_names = c("row", "barcode", "doublet_score"),
+                  show_col_types = F) %>% 
+    dplyr::select(-row) %>% 
+    dplyr::mutate(barcode = paste(sample, barcode, sep = "_")) %>% 
+    dplyr::filter(doublet_score >= threshold) %>% 
+    .$barcode
+  doublets[[i]] = dubs
+}
+
+#ensure doublets are detected in all
+dub_counts = vapply(doublets, length, 1)
+names(dub_counts) = names(dub_files)
+dub_counts
+  
+doublets = unlist(doublets)
+```   
+
+```{r}
+oligos_577 = read.csv([REDACTED_FILE_PATH] %>% 
+  .$Barcode %>% 
+  paste0("SC577_", .)
+
+doublets_577 = doublets[grepl("SC577_", doublets)]
+
+length(intersect(doublets_577, oligos_577)) / length(oligos_577) * 100
+```
+
+```{r}
+hashtag_dirs_b1 = list.dirs([REDACTED_FILE_PATH]
+                         full.names = T, recursive = F)
+tmp = basename(hashtag_dirs_b1)
+hashtag_dirs_b1 = paste0(hashtag_dirs_b1, "/outs/filtered_feature_bc_matrix")
+names(hashtag_dirs_b1) = tmp
+
+hashtag_dirs_b2 = list.dirs([REDACTED_FILE_PATH]
+                         full.names = T, recursive = F)
+tmp = basename(hashtag_dirs_b2)
+hashtag_dirs_b2 = paste0(hashtag_dirs_b2, "/outs/filtered_feature_bc_matrix")
+names(hashtag_dirs_b2) = tmp
+
+hashtag_dirs_b3 = list.dirs([REDACTED_FILE_PATH]
+                         full.names = T, recursive = F)
+tmp = basename(hashtag_dirs_b3)
+hashtag_dirs_b3 = paste0(hashtag_dirs_b3, "/outs/filtered_feature_bc_matrix")
+names(hashtag_dirs_b3) = tmp
+
+
+#to start, merge only by batch, per Seurat github's rec: https://github.com/satijalab/seurat/issues/6698
+hashtag_data_b1 = Read10X(hashtag_dirs_b1)
+deepseq_b1 = CreateSeuratObject(counts = hashtag_data_b1$`Gene Expression`)
+
+hashtag_data_b2 = Read10X(hashtag_dirs_b2)
+deepseq_b2 = CreateSeuratObject(counts = hashtag_data_b2$`Gene Expression`)
+
+hashtag_data_b3 = Read10X(hashtag_dirs_b3)
+deepseq_b3 = CreateSeuratObject(counts = hashtag_data_b3$`Gene Expression`)
+```   
+
+```{r}
+iav_genes = rownames(deepseq_b1)[grepl("IAV-GCF-[REDACTED_IDENTIFIER].1-", rownames(deepseq_b1))]
+iav_counts_b1 = FetchData(object = deepseq_b1, vars = iav_genes) %>% 
+  t() %>% 
+  as_tibble(rownames = NA) %>% 
+  rownames_to_column("Gene") %>%
+  mutate(Gene = factor(gsub("IAV-GCF-[REDACTED_IDENTIFIER].1-", "", Gene))) %>% 
+  pivot_longer(cols = -Gene, names_to = "Cell", values_to = "Counts")
+iav_counts_b2 = FetchData(object = deepseq_b2, vars = iav_genes) %>% 
+  t() %>% 
+  as_tibble(rownames = NA) %>% 
+  rownames_to_column("Gene") %>%
+  mutate(Gene = factor(gsub("IAV-GCF-[REDACTED_IDENTIFIER].1-", "", Gene))) %>% 
+  pivot_longer(cols = -Gene, names_to = "Cell", values_to = "Counts")
+iav_counts_b3 = FetchData(object = deepseq_b3, vars = iav_genes) %>% 
+  t() %>% 
+  as_tibble(rownames = NA) %>% 
+  rownames_to_column("Gene") %>%
+  mutate(Gene = factor(gsub("IAV-GCF-[REDACTED_IDENTIFIER].1-", "", Gene))) %>% 
+  pivot_longer(cols = -Gene, names_to = "Cell", values_to = "Counts")
+iav_counts = rbind(iav_counts_b1, iav_counts_b2, iav_counts_b3)
+
+iav_counts_plot = ggplot(iav_counts, aes(x = Gene, y = Counts)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, height = 0) +
+  ylim(0, 1) +
+  theme_bw() +
+  labs(x = "", y = "Raw Counts")
+iav_counts_plot
+
+iav_counts_table = iav_counts %>% 
+  dplyr::rename(`IAV Gene` = Gene) %>% 
+  group_by(`IAV Gene`) %>% 
+  dplyr::summarize(`Total Counts\nin Dataset` = sum(Counts, na.rm = T),
+                   `Mean Counts\nper Cell` = mean(Counts, na.rm = T),
+                   SD = sd(Counts, na.rm = T)) %>% 
+  as.data.frame()
+iav_counts_table
+
+#export
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 6,
+    height = 4, 
+    family = "Arial")
+iav_counts_plot
+dev.off()
+saveRDS(iav_counts_plot, [REDACTED_FILE_PATH]
+
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 10,
+    height = 6, 
+    family = "Arial")
+grid.table(iav_counts_table, rows = NULL)
+dev.off()
+write_csv(iav_counts_table, [REDACTED_FILE_PATH]
+```      
+
+```{r}
+#Remove genome prefix
+deepseq_b1 = Seurat.utils::RenameGenesSeurat(obj = deepseq_b1, newnames = gsub("GRCm38--------------", "", rownames(deepseq_b1)))
+deepseq_b1 = PercentageFeatureSet(deepseq_b1, pattern = "^mt-", col.name = "pct_mito")
+
+deepseq_b2 = Seurat.utils::RenameGenesSeurat(obj = deepseq_b2, newnames = gsub("GRCm38--------------", "", rownames(deepseq_b2)))
+deepseq_b2 = PercentageFeatureSet(deepseq_b2, pattern = "^mt-", col.name = "pct_mito")
+
+deepseq_b3 = Seurat.utils::RenameGenesSeurat(obj = deepseq_b3, newnames = gsub("GRCm38--------------", "", rownames(deepseq_b3)))
+deepseq_b3 = PercentageFeatureSet(deepseq_b3, pattern = "^mt-", col.name = "pct_mito")
+```
+
+```{r}
+ggplot(data = NULL, aes(x = deepseq_b1$nFeature_RNA)) +
+  geom_histogram(bins = 500) + 
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_vline(xintercept = 260)
+
+detection = rowSums(deepseq_b1@assays$RNA$counts > 0)
+ggplot(data = NULL, aes(x = detection)) +
+  geom_histogram(bins = 200) +
+  scale_x_log10() +
+  #scale_y_log10() +
+  geom_vline(xintercept = 30)
+
+ggplot(data = NULL, aes(x = deepseq_b1$pct_mito)) +
+  geom_histogram(bins = 100) +
+  geom_vline(xintercept = 15)
+```   
+
+```{r}
+ggplot(data = NULL, aes(x = deepseq_b2$nFeature_RNA)) +
+  geom_histogram(bins = 500) + 
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_vline(xintercept = 270)
+
+detection = rowSums(deepseq_b2@assays$RNA$counts > 0)
+ggplot(data = NULL, aes(x = detection)) +
+  geom_histogram(bins = 200) +
+  scale_x_log10() +
+  #scale_y_log10() +
+  geom_vline(xintercept = 30)
+
+ggplot(data = NULL, aes(x = deepseq_b2$pct_mito)) +
+  geom_histogram(bins = 100) +
+  geom_vline(xintercept = 15)
+```   
+
+```{r}
+ggplot(data = NULL, aes(x = deepseq_b3$nFeature_RNA)) +
+  geom_histogram(bins = 500) + 
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_vline(xintercept = 120)
+
+detection = rowSums(deepseq_b3@assays$RNA$counts > 0)
+ggplot(data = NULL, aes(x = detection)) +
+  geom_histogram(bins = 200) +
+  scale_x_log10() +
+  #scale_y_log10() +
+  geom_vline(xintercept = 30)
+
+ggplot(data = NULL, aes(x = deepseq_b3$pct_mito)) +
+  geom_histogram(bins = 100) +
+  geom_vline(xintercept = 15)
+```   
+
+```{r}
+deepseq_b1 = CreateSeuratObject(counts = hashtag_data_b1$`Gene Expression`, 
+                             min.cells = 30,
+                             min.features = 260)
+#Remove genome prefix
+deepseq_b1 = Seurat.utils::RenameGenesSeurat(obj = deepseq_b1, newnames = gsub("GRCm38--------------", "", rownames(deepseq_b1)))
+deepseq_b1 = PercentageFeatureSet(deepseq_b1, pattern = "^mt-", col.name = "pct_mito")
+
+deepseq_b1 = deepseq_b1 %>% 
+  filter(pct_mito < 15)
+
+dim(deepseq_b1)
+```   
+
+```{r}
+length(intersect(colnames(deepseq_b1), oligos_577)) / length(oligos_577) * 100
+```   
+
+```{r}
+deepseq_b2 = CreateSeuratObject(counts = hashtag_data_b2$`Gene Expression`, 
+                             min.cells = 30,
+                             min.features = 270)
+#Remove genome prefix
+deepseq_b2 = Seurat.utils::RenameGenesSeurat(obj = deepseq_b2, newnames = gsub("GRCm38--------------", "", rownames(deepseq_b2)))
+deepseq_b2 = PercentageFeatureSet(deepseq_b2, pattern = "^mt-", col.name = "pct_mito")
+
+deepseq_b2 = deepseq_b2 %>% 
+  filter(pct_mito < 15)
+
+dim(deepseq_b2)
+```   
+
+```{r}
+deepseq_b3 = CreateSeuratObject(counts = hashtag_data_b3$`Gene Expression`, 
+                             min.cells = 30,
+                             min.features = 120)
+#Remove genome prefix
+deepseq_b3 = Seurat.utils::RenameGenesSeurat(obj = deepseq_b3, newnames = gsub("GRCm38--------------", "", rownames(deepseq_b3)))
+deepseq_b3 = PercentageFeatureSet(deepseq_b3, pattern = "^mt-", col.name = "pct_mito")
+
+deepseq_b3 = deepseq_b3 %>% 
+  filter(pct_mito < 15)
+
+dim(deepseq_b3)
+```
+
+```{r}
+deepseq_b1 = SCTransform(deepseq_b1, 
+                      method = "glmGamPoi",
+                      seed.use = 12345,
+                      return.only.var.genes = T)
+
+#HTOs
+in_both = intersect(colnames(deepseq_b1), colnames(hashtag_data_b1$`Antibody Capture`)) #no oligodendrocytes lost here either
+deepseq_b1[["HTO"]] = CreateAssayObject(counts = hashtag_data_b1$`Antibody Capture`[, in_both])
+deepseq_b1 = NormalizeData(deepseq_b1, assay = "HTO", normalization.method = "CLR")
+gc()
+```   
+
+```{r}
+deepseq_b2 = SCTransform(deepseq_b2, 
+                      method = "glmGamPoi",
+                      seed.use = 12345,
+                      return.only.var.genes = T)
+
+#HTOs
+in_both = intersect(colnames(deepseq_b2),
+                     colnames(hashtag_data_b2$`Antibody Capture`))
+deepseq_b2[["HTO"]] = CreateAssayObject(counts = hashtag_data_b2$`Antibody Capture`[, in_both])
+deepseq_b2 = NormalizeData(deepseq_b2, assay = "HTO", normalization.method = "CLR")
+gc()
+```   
+
+```{r}
+deepseq_b3 = SCTransform(deepseq_b3, 
+                      method = "glmGamPoi",
+                      seed.use = 12345,
+                      return.only.var.genes = T)
+
+#HTOs
+in_both = intersect(colnames(deepseq_b3),
+                     colnames(hashtag_data_b3$`Antibody Capture`))
+deepseq_b3[["HTO"]] = CreateAssayObject(counts = hashtag_data_b3$`Antibody Capture`[, in_both])
+deepseq_b3 = NormalizeData(deepseq_b3, assay = "HTO", normalization.method = "CLR")
+gc()
+```   
+
+```{r}
+deepseq_b1 = HTODemux(deepseq_b1, assay = "HTO", positive.quantile = 0.99)
+table(deepseq_b1$HTO_classification.global, deepseq_b1$orig.ident)
+```   
+
+```{r}
+deepseq_b1 = MULTIseqDemux(deepseq_b1, assay = "HTO", autoThresh = T)
+deepseq_b1 = deepseq_b1 %>% 
+  mutate(MULTI_ID.global = factor(case_when(MULTI_ID == "Negative" ~ "Negative",
+                                     MULTI_ID == "Doublet" ~ "Doublet",
+                                     TRUE ~ "Singlet")))
+
+table(deepseq_b1$MULTI_ID.global, deepseq_b1$orig.ident)
+```   
+
+```{r}
+just_ods_577 = subset(deepseq_b1, cells = oligos_577)
+
+table(just_ods_577$HTO_classification.global)
+table(just_ods_577$MULTI_ID.global)
+```
+
+```{r}
+hist(log10(deepseq_b1$nCount_HTO), breaks = 1000)
+hist(log10(just_ods_577$nCount_HTO), breaks = 100)
+```   
+
+```{r}
+b1_hto_hm = HTOHeatmap(deepseq_b1)
+
+CairoPNG([REDACTED_FILE_PATH]
+    width = 6,
+    height = 4, 
+    res = 300,
+    units = "in",
+    family = "Arial")
+b1_hto_hm
+dev.off()
+
+b1_hto_hm
+```
+
+```{r}
+deepseq_b2 = HTODemux(deepseq_b2, assay = "HTO", positive.quantile = 0.99)
+table(deepseq_b2$HTO_classification.global, deepseq_b2$orig.ident)
+```   
+
+```{r}
+deepseq_b2 = MULTIseqDemux(deepseq_b2, assay = "HTO", autoThresh = T)
+deepseq_b2 = deepseq_b2 %>% 
+  mutate(MULTI_ID.global = factor(case_when(MULTI_ID == "Negative" ~ "Negative",
+                                     MULTI_ID == "Doublet" ~ "Doublet",
+                                     TRUE ~ "Singlet")))
+
+table(deepseq_b2$MULTI_ID.global, deepseq_b2$orig.ident)
+```   
+
+```{r}
+b2_hto_hm = HTOHeatmap(deepseq_b2)
+
+CairoPNG([REDACTED_FILE_PATH]
+    width = 6,
+    height = 4, 
+    res = 300,
+    units = "in",
+    family = "Arial")
+b2_hto_hm
+dev.off()
+
+b2_hto_hm
+```   
+
+```{r}
+deepseq_b3 = HTODemux(deepseq_b3, assay = "HTO", positive.quantile = 0.99)
+table(deepseq_b3$HTO_classification.global, deepseq_b3$orig.ident)
+```   
+
+```{r}
+deepseq_b3 = MULTIseqDemux(deepseq_b3, assay = "HTO", autoThresh = T)
+deepseq_b3 = deepseq_b3 %>% 
+  mutate(MULTI_ID.global = factor(case_when(MULTI_ID == "Negative" ~ "Negative",
+                                     MULTI_ID == "Doublet" ~ "Doublet",
+                                     TRUE ~ "Singlet")))
+
+table(deepseq_b3$MULTI_ID.global, deepseq_b3$orig.ident)
+```
+
+```{r}
+b3_hto_hm = HTOHeatmap(deepseq_b3)
+
+CairoPNG([REDACTED_FILE_PATH]
+    width = 6,
+    height = 4, 
+    res = 300,
+    units = "in",
+    family = "Arial")
+b3_hto_hm
+dev.off()
+
+b3_hto_hm
+```
+
+```{r}
+deepseq_b1 = deepseq_b1 %>% 
+  #remove both HTO- and transcriptome-defined doublets
+  filter(MULTI_ID.global == "Singlet" & !(colnames(.) %in% doublets))
+
+table(deepseq_b1$MULTI_ID.global, deepseq_b1$orig.ident)
+```   
+
+```{r}
+deepseq_b2 = deepseq_b2 %>% 
+  #remove both HTO- and transcriptome-defined doublets
+  filter(MULTI_ID.global == "Singlet" & !(colnames(.) %in% doublets))
+
+table(deepseq_b2$MULTI_ID.global, deepseq_b2$orig.ident)
+```   
+
+```{r}
+deepseq_b3 = deepseq_b3 %>% 
+  #remove both HTO- and transcriptome-defined doublets
+  filter(MULTI_ID.global == "Singlet" & !(colnames(.) %in% doublets))
+
+table(deepseq_b3$MULTI_ID.global, deepseq_b3$orig.ident)
+```
+
+```{r}
+# find intersecting variable features from batches 1-3
+# see https://github.com/satijalab/seurat/issues/5761
+combined_var_features = SelectIntegrationFeatures(object.list = list(deepseq_b1, deepseq_b2, deepseq_b3))
+deepseq = merge(x = deepseq_b1, y = c(deepseq_b2, deepseq_b3))
+VariableFeatures(deepseq) = combined_var_features
+table(deepseq$orig.ident)
+
+rm(deepseq_b1, deepseq_b2, deepseq_b3)
+gc()
+```
+
+```{r}
+md12 = read_excel([REDACTED_FILE_PATH]
+                sheet = "Metadata") %>% 
+  dplyr::filter(!is.na(takedown_date) & genotype == "C57BL/6J") %>% 
+  dplyr::arrange(takedown_date) %>% 
+  dplyr::mutate(age_at_instillation = interval(date_of_birth, instillation_date) %/% months(1),
+                age_group = factor(case_when(age_at_instillation <= 6 ~ "Young",
+                                             age_at_instillation >= 18 ~ "Old"),
+                                   levels = c("Young", "Middle-Age", "Old")),
+                mouse = factor(paste(cage, tail_number, sep = "_")),
+                IAV = factor(ifelse(pfu > 0,
+                            yes = "IAV",
+                            no = "Naïve")),
+                dpi = as.numeric(difftime(as.Date(takedown_date), as.Date(instillation_date), 
+                       units = "days")),
+                flu_age = factor(paste(age_group, IAV, sep = ", ")),
+                combined = factor(paste(age_group, flu_group, sep = "_"),
+                                  levels = c("Young_Naïve", "Young_Acute", "Young_Recovered",
+                                             "Middle-Age_Naïve", "Middle-Age_Acute", "Middle-Age_Recovered",
+                                             "Old_Naïve", "Old_Acute", "Old_Recovered")),
+                flu_group = factor(flu_group, levels = c("Naïve", "Acute", "Recovered")),
+                batch_date = takedown_date)
+
+batches3 = read_excel([REDACTED_FILE_PATH]
+                sheet = "Batches")
+md3 = read_excel([REDACTED_FILE_PATH]
+                sheet = "Metadata") %>% 
+  dplyr::filter(!is.na(takedown_date)) %>% 
+  dplyr::arrange(takedown_date) %>% 
+  dplyr::mutate(age_at_instillation = interval(date_of_birth, instillation_date) %/% months(1),
+                age_group = factor(case_when(age_at_instillation <= 6 ~ "Young",
+                                             age_at_instillation > 6 & age_at_instillation < 18 ~ "Middle-Age",
+                                             age_at_instillation >= 18 ~ "Old"),
+                                   levels = c("Young", "Middle-Age", "Old")),
+                mouse = factor(paste(cage, ear_tag, sep = "_")),
+                IAV = factor(ifelse(pfu > 0,
+                            yes = "IAV",
+                            no = "Naïve")),
+                dpi = as.numeric(difftime(as.Date(takedown_date), as.Date(instillation_date), 
+                       units = "days")),
+                flu_group = factor(case_when(flu_group == "Naïve" ~ "Naïve",
+                                             flu_group == "7DPI" ~ "Acute",
+                                             flu_group == "30DPI" ~ "Recovered"),
+                                             levels = c("Naïve", "Acute", "Recovered")),
+                flu_age = factor(paste(age_group, IAV, sep = ", ")),
+                combined = factor(paste(age_group, flu_group, sep = "_"),
+                                  levels = c("Young_Naïve", "Young_Acute", "Young_Recovered",
+                                             "Middle-Age_Naïve", "Middle-Age_Acute", "Middle-Age_Recovered",
+                                             "Old_Naïve", "Old_Acute", "Old_Recovered"))) %>% 
+  left_join(., batches3) %>% 
+  #batches 8 and 9 are from same day so need to split into -1 and -2
+  dplyr::mutate(batch_date = paste(takedown_date, batch, sep = "_"))
+
+
+md = bind_rows(md12, md3)
+
+#each sample was duplicated across 2 lanes on each day
+batches = data.frame(batch_date = 
+                       c(unique(md$batch_date)[1], unique(md$batch_date)[1],
+                         unique(md$batch_date)[2], unique(md$batch_date)[2],
+                         unique(md$batch_date)[3], unique(md$batch_date)[3],
+                         unique(md$batch_date)[4], unique(md$batch_date)[4],
+                         unique(md$batch_date)[5], unique(md$batch_date)[5],
+                         unique(md$batch_date)[6], unique(md$batch_date)[6],
+                         unique(md$batch_date)[7], unique(md$batch_date)[7],
+                         unique(md$batch_date)[8], unique(md$batch_date)[9],
+                         unique(md$batch_date)[9], unique(md$batch_date)[10],
+                         unique(md$batch_date)[10], unique(md$batch_date)[11],
+                         unique(md$batch_date)[11], unique(md$batch_date)[12],
+                         unique(md$batch_date)[12]),
+                     scRNA_library = c("SC574", "SC575", "SC576", "SC577",
+                                     "SC578", "SC579", "SC596", "SC597",
+                                     "SC598", "SC599", "SC616", "SC617",
+                                     "SC618", "SC619", "SC743", "SC744",
+                                     "SC745", "SC746", "SC747", "SC748",
+                                     "SC749", "SC750", "SC751"),
+                     scRNA_batch = c(1, 1, 2, 2, 3, 
+                                     3, 4, 4, 5, 5, 
+                                     6, 6, 7, 7, 8, 
+                                     8, 8, 9, 9, 10,
+                                     10, 11, 11))
+
+md = left_join(md, batches) %>% 
+  dplyr::mutate(sample_id = paste(scRNA_library, hashtag, sep = "_"))
+```
+
+```{r}
+deepseq = deepseq %>% 
+  mutate(sample_id = paste(orig.ident, MULTI_classification, sep = "_")) %>% 
+  left_join(., md, 
+                    by = c("sample_id", "orig.ident" = "scRNA_library", "MULTI_classification" = "hashtag"))
+
+#table(deepseq$mouse, deepseq$MULTI_classification) # :) no overlap
+table(deepseq$mouse)
+table(deepseq$age_group, deepseq$flu_group)
+```
+
+```{r}
+deepseq = PrepSCTFindMarkers(deepseq) #still have 3 different SCT models
+deepseq$major_batch = case_when(deepseq$scRNA_batch <= 5 ~ 1,
+                                deepseq$scRNA_batch %in% c(6, 7) ~ 2,
+                                deepseq$scRNA_batch >= 8 ~ 3)
+saveRDS(deepseq, [REDACTED_FILE_PATH]
+```   

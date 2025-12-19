@@ -1,0 +1,425 @@
+```{r setup, error=FALSE, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(janitor)
+library(broom)
+library(ggsignif)
+library(ggsci)
+library(Cairo)
+library(extrafont)
+
+pal = pal_npg()(9)
+age_pal = c("Old" = pal[1],
+             "Middle-Age" = pal[5],
+             "Young" = pal[2])
+```   
+
+```{r}
+flow_b12 = read.csv([REDACTED_FILE_PATH] %>% 
+  dplyr::rename(file = X) %>% 
+  dplyr::filter(!(file %in% c("Mean", "SD"))) %>% 
+  dplyr::select(-X.1) %>% 
+  clean_names() %>% 
+  dplyr::mutate(age_group = factor(case_when(grepl("young", file, ignore.case = T) ~ "Young",
+                                             grepl("old", file, ignore.case = T) ~ "Old"),
+                                   levels = c("Young", "Middle-Age", "Old")),
+                treatment = factor(case_when(grepl("IAV", file, ignore.case = T) ~ "Recovered",
+                                             grepl("naive", file, ignore.case = T) ~ "Naïve",
+                                             grepl("\\d+DPI", file, ignore.case = T) ~ "Acute"),
+                                   levels = c("Naïve", "Recovered", "Acute")),
+                combined = factor(paste(age_group, treatment, sep = ", "),
+                                  levels = c("Young, Naïve", "Young, Recovered", "Young, Acute",
+                                             "Middle-Age, Naïve", "Middle-Age, Recovered", "Middle-Age, Acute",
+                                             "Old, Naïve", "Old, Recovered", "Old, Acute")))
+
+flow_b3 = read.csv([REDACTED_FILE_PATH] %>% 
+  dplyr::rename(file = X) %>% 
+  dplyr::filter(!(file %in% c("Mean", "SD"))) %>% 
+  dplyr::select(-X.1) %>% 
+  clean_names() %>% 
+  dplyr::mutate(age_group = factor(case_when(grepl("12mo", file, ignore.case = T) ~ "Middle-Age",
+                                             grepl("18mo", file, ignore.case = T) ~ "Old"),
+                                   levels = c("Young", "Middle-Age", "Old")),
+                treatment = factor(case_when(grepl("30DPI", file, ignore.case = T) ~ "Recovered",
+                                             grepl("naive", file, ignore.case = T) ~ "Naïve",
+                                             grepl("7DPI", file, ignore.case = T) ~ "Acute"),
+                                   levels = c("Naïve", "Recovered", "Acute")),
+                combined = factor(paste(age_group, treatment, sep = ", "),
+                                  levels = c("Young, Naïve", "Young, Recovered", "Young, Acute",
+                                             "Middle-Age, Naïve", "Middle-Age, Recovered", "Middle-Age, Acute",
+                                             "Old, Naïve", "Old, Recovered", "Old, Acute")))
+
+flow = bind_rows(flow_b12, flow_b3)
+rm(flow_b12, flow_b3)
+```
+
+```{r}
+flow_percentages = flow %>% 
+  #generate percentages for celltypes of interest
+  dplyr::mutate(Astrocytes.percent_of_live_singlets = 
+                  non_debris_single_cells_live_cd45_cd3e_astrocytes_count / 
+                  non_debris_single_cells_live_count * 100,
+                Microglia.percent_of_live_singlets = 
+                  non_debris_single_cells_live_cd45int_cd3e_macrophages_microglia_count / 
+                  non_debris_single_cells_live_count * 100,
+                `T Cells.percent_of_live_singlets` = 
+                  non_debris_single_cells_live_t_cells_count / 
+                  non_debris_single_cells_live_count * 100,
+                `CD8+ T Cells.percent_of_live_singlets` = 
+                  non_debris_single_cells_live_t_cells_cd8_t_cells_count / 
+                  non_debris_single_cells_live_count * 100,
+                Microglia.percent_of_CD45 = 
+                  non_debris_single_cells_live_cd45int_cd3e_macrophages_microglia_count / 
+                  non_debris_single_cells_live_cd45_count * 100,
+                `T Cells.percent_of_CD45` = 
+                  non_debris_single_cells_live_t_cells_count / 
+                  non_debris_single_cells_live_cd45_count * 100,
+                `CD8+ T Cells.percent_of_CD45` = 
+                  non_debris_single_cells_live_t_cells_cd8_t_cells_count / 
+                  non_debris_single_cells_live_cd45_count * 100) %>% 
+  pivot_longer(cols = Astrocytes.percent_of_live_singlets:`CD8+ T Cells.percent_of_CD45`, 
+               names_to = c("Celltype", ".value"),
+               names_sep = "\\.") %>% 
+  dplyr::mutate(Celltype = factor(Celltype)) %>% 
+  dplyr::select(file, age_group, treatment, combined, Celltype, percent_of_live_singlets, percent_of_CD45)
+```   
+
+```{r}
+flow_percentages %>% 
+  dplyr::filter(Celltype != "Astrocytes") %>% 
+  group_by(Celltype) %>% 
+  dplyr::summarize(pearson_R = cor(cur_data()$percent_of_live_singlets, 
+                                   cur_data()$percent_of_CD45,
+                                   use = "pairwise.complete.obs",
+                                   method = "pearson"),
+                   spearman_rho = cor(cur_data()$percent_of_live_singlets, 
+                                   cur_data()$percent_of_CD45, 
+                                   use = "pairwise.complete.obs",
+                                   method = "spearman"))
+```
+
+```{r}
+flow_percentages %>% 
+  dplyr::filter(Celltype != "Astrocytes") %>% 
+  ggplot(aes(x = percent_of_live_singlets, y = percent_of_CD45)) +
+  facet_wrap(~ Celltype, scales = "free_y") +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0) +
+  theme_bw()
+```
+
+```{r}
+ggplot(flow_percentages, aes(x = percent_of_live_singlets)) +
+  facet_wrap(~ Celltype, scales = "free_x") +
+  geom_histogram()
+```   
+
+```{r}
+flow_percentages %>% 
+  dplyr::filter(Celltype != "Astrocytes") %>% 
+  group_by(Celltype) %>% 
+  dplyr::summarize(pval = shapiro.test(percent_of_live_singlets)$p.value)
+```   
+
+```{r}
+flow_percentages_wide = flow_percentages %>% 
+  dplyr::filter(Celltype != "Astrocytes") %>% 
+  dplyr::select(-percent_of_CD45) %>% 
+  pivot_wider(names_from = Celltype, values_from = percent_of_live_singlets, names_prefix = "Percent_")
+```
+
+```{r}
+aov(cbind(Percent_Microglia, `Percent_T Cells`) ~ age_group * treatment, data = flow_percentages_wide) %>% 
+  summary()
+```   
+
+```{r}
+#take out CD8s (incomplete data due to new panel)
+flow_percentages_complete = flow_percentages %>% 
+  dplyr::filter(!(Celltype %in% c("CD8+ T Cells", "Astrocytes"))) %>% 
+  #refactor
+  dplyr::mutate(Celltype = factor(as.character(Celltype)))
+
+daa_comps_aging = lapply(levels(flow_percentages_complete$Celltype), function(ct){
+  sub = subset(flow_percentages_complete, Celltype == ct)
+  wilcox = pairwise.wilcox.test(x = sub$percent_of_live_singlets, sub$age_group, p.adjust.method = "none") %>% 
+    tidy() %>% 
+    dplyr::mutate(Celltype = ct) }) %>% 
+  bind_rows() %>% 
+  dplyr::mutate(padj = p.adjust(p.value, method = "fdr"),
+                padj_formatted = format(padj, digits = 3, scientific = T)) %>% 
+  dplyr::filter(padj < 0.05) %>% 
+  group_by(Celltype) %>% 
+  dplyr::mutate(yval = seq(from = ifelse(cur_group() == "T Cells",
+                                         yes = 4,
+                                         no = max(subset(flow_percentages_complete, Celltype == as.character(cur_group()))$percent_of_live_singlets, na.rm = T) * 1.1), 
+                           by = max(subset(flow_percentages_complete, Celltype == as.character(cur_group()))$percent_of_live_singlets, na.rm = T) * 0.1, 
+                           length.out = n())) %>% 
+  ungroup() %>% 
+  dplyr::mutate(group1 = factor(group1,
+                                   levels = c("Young", "Middle-Age", "Old")),
+                group2 = factor(group2,
+                                   levels = c("Young", "Middle-Age", "Old")))
+```
+
+```{r, warning=FALSE}
+aging_plot = flow_percentages_complete %>% 
+  #dplyr::filter(Celltype != "Microglia") %>% 
+  ggplot(aes(x = age_group, y = percent_of_live_singlets, fill = age_group)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.3) +
+  facet_wrap(~ Celltype, scales = "free_y") +
+  theme_bw(base_family = "Arial") +
+  theme(axis.text.x = element_text(size = 24),
+        strip.text.x = element_text(size = 32),
+        axis.title.y = element_text(size = 32),
+        legend.position = "none") +
+  labs(x = "", y = "Percent of Live, CD45+ Singlets") +
+  scale_fill_manual(values = age_pal) +
+  geom_signif(data = subset(daa_comps_aging, Celltype != "Microglia"),
+              aes(xmin = group1, xmax = group2, annotations = padj_formatted, y_position = yval),
+              inherit.aes = F,
+              tip_length = 0,
+              manual = T) +
+  scale_x_discrete(drop = FALSE)
+
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 9,
+    height = 6, 
+    family = "Arial")
+aging_plot
+dev.off()
+png([REDACTED_FILE_PATH]
+    width = 9,
+    height = 6, 
+    units = "in",
+    res = 300,
+    family = "Arial")
+aging_plot
+dev.off()
+saveRDS(aging_plot, [REDACTED_FILE_PATH]
+
+aging_plot
+```   
+
+```{r}
+cd8_plot = ggplot(flow_percentages, aes(x = age_group, y = percent_of_live_singlets, fill = age_group)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.3) +
+  facet_wrap(~ Celltype, scales = "free_y") +
+  theme_bw(base_family = "Arial") +
+  theme(axis.text.x = element_text(size = 20),
+        strip.text.x = element_text(size = 24),
+        axis.title.y = element_text(size = 24),
+        legend.position = "none") +
+  labs(x = "", y = "Percent of Live, CD45+ Singlets") +
+  scale_fill_manual(values = age_pal) +
+  geom_signif(data = daa_comps_aging,
+              aes(xmin = group1, xmax = group2, annotations = padj_formatted, y_position = yval),
+              inherit.aes = F,
+              tip_length = 0,
+              manual = T) +
+  scale_x_discrete(drop = FALSE)
+
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 9,
+    height = 6, 
+    family = "Arial")
+cd8_plot
+dev.off()
+
+cd8_plot
+```
+
+```{r}
+daa_comps_combined = lapply(levels(flow_percentages_complete$Celltype), function(ct){
+  sub = subset(flow_percentages_complete, Celltype == ct)
+  pairwise = pairwise.wilcox.test(x = sub$percent_of_live_singlets, g = sub$combined, p.adjust.method = "none") %>% 
+    tidy() %>% 
+    dplyr::mutate(Celltype = ct) }) %>% 
+  bind_rows() %>% 
+  dplyr::mutate(padj = p.adjust(p.value, method = "fdr"),
+                padj_formatted = format(padj, digits = 3, scientific = T)) %>% 
+  dplyr::filter(padj < 0.05) #%>% 
+#   group_by(Celltype) %>%
+#   dplyr::mutate(yval = seq(from = max(subset(flow_percentages_complete, Celltype == as.character(cur_group()))$percent_of_live_singlets, na.rm = T) * 1.05,
+#                            by = max(subset(flow_percentages_complete, Celltype == as.character(cur_group()))$percent_of_live_singlets, na.rm = T) * 0.1,
+#                            length.out = n())) %>%
+#   ungroup()
+
+#nothing survives
+```
+
+```{r, warning=FALSE}
+flow_percentages_complete = flow_percentages_complete %>% 
+  dplyr::mutate(combined = factor(combined, levels = c("Young, Naïve", "Young, Acute", "Young, Recovered",
+                                                       "Middle-Age, Naïve", "Middle-Age, Acute", "Middle-Age, Recovered",
+                                                       "Old, Naïve", "Old, Acute", "Old, Recovered")))
+
+combined_plot = flow_percentages_complete %>% 
+  dplyr::filter(Celltype == "Microglia") %>% 
+  ggplot(aes(x = combined, y = percent_of_live_singlets, fill = combined)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.3) +
+  facet_wrap(~ Celltype, scales = "free_y") +
+  theme_bw(base_family = "Arial") +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        strip.text.x = element_text(size = 24),
+        axis.title.y = element_text(size = 18),
+        axis.title.x = element_text(size = 18)) +
+  labs(x = "", y = "Percent of Live, CD45+ Singlets") +
+  scale_fill_npg() #+
+  # geom_signif(data = daa_comps_combined,
+  #             aes(xmin = group1, xmax = group2, annotations = padj_formatted, y_position = yval),
+  #             inherit.aes = F,
+  #             tip_length = 0,
+  #             manual = T)
+
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 9,
+    height = 5, 
+    family = "Arial")
+combined_plot
+dev.off()
+saveRDS(combined_plot, [REDACTED_FILE_PATH]
+
+combined_plot
+```   
+
+```{r}
+tcell_comps_combined = lapply("T Cells", function(ct){
+  sub = subset(flow_percentages_complete, Celltype == ct)
+  pairwise = pairwise.wilcox.test(x = sub$percent_of_live_singlets, g = sub$combined, p.adjust.method = "none") %>% 
+    tidy() %>% 
+    dplyr::mutate(Celltype = ct) }) %>% 
+  bind_rows() %>% 
+  dplyr::mutate(padj = p.adjust(p.value, method = "fdr"),
+                padj_formatted = format(padj, digits = 3, scientific = T)) %>% 
+  dplyr::filter(padj < 0.05) %>% 
+  group_by(Celltype) %>% 
+  dplyr::mutate(yval = seq(from = 0.88, 
+                           by = max(subset(flow_percentages_complete, Celltype == as.character(cur_group()))$percent_of_live_singlets, na.rm = T) * 0.1, 
+                           length.out = n())) %>% 
+  ungroup() 
+
+```
+
+```{r, warning=FALSE}
+combined_plot_tcells = flow_percentages_complete %>% 
+  dplyr::filter(Celltype == "T Cells") %>% 
+  ggplot(aes(x = combined, y = percent_of_live_singlets, fill = combined)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.3) +
+  theme_bw(base_family = "Arial") +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        strip.text.x = element_text(size = 24),
+        axis.title.y = element_text(size = 18),
+        axis.title.x = element_text(size = 18)) +
+  labs(x = "", y = " T Cells (Percent of Live, CD45+ Singlets)") +
+  scale_fill_npg() +
+  geom_signif(data = tcell_comps_combined,
+              aes(xmin = group1, xmax = group2, annotations = padj_formatted, y_position = yval),
+              inherit.aes = F,
+              tip_length = 0,
+              manual = T)
+
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 6,
+    height = 6, 
+    family = "Arial")
+combined_plot_tcells
+dev.off()
+png([REDACTED_FILE_PATH]
+    width = 6,
+    height = 6, 
+    units = "in",
+    res = 300,
+    family = "Arial")
+combined_plot_tcells
+dev.off()
+
+saveRDS(combined_plot_tcells, [REDACTED_FILE_PATH]
+
+combined_plot_tcells
+```      
+
+```{r}
+cd8_data = flow %>% 
+  #generate percentages for celltypes of interest
+  dplyr::mutate(`T Cells.percent_of_CD45` = 
+                  non_debris_single_cells_live_t_cells_count / 
+                  non_debris_single_cells_live_cd45_count * 100,
+                `CD8+ T Cells.percent_of_tcells` = 
+                  non_debris_single_cells_live_t_cells_cd8_t_cells_count / 
+                  non_debris_single_cells_live_t_cells_count * 100,
+                `CD8+ T Cells.percent_of_CD45` = 
+                  non_debris_single_cells_live_t_cells_cd8_t_cells_count / 
+                  non_debris_single_cells_live_cd45_count * 100) %>% 
+  pivot_longer(cols = `T Cells.percent_of_CD45`:`CD8+ T Cells.percent_of_CD45`, 
+               names_to = c("Celltype", ".value"),
+               names_sep = "\\.") %>% 
+  dplyr::filter(grepl("T Cells", Celltype) & age_group == "Middle-Age") %>% 
+  dplyr::mutate(Celltype = factor(Celltype, levels = c("T Cells", "CD8+ T Cells")),
+                treatment = factor(treatment, levels = c("Naïve", "Acute", "Recovered"))) %>% 
+  dplyr::select(file, age_group, treatment, combined, Celltype, percent_of_tcells, percent_of_CD45)
+```
+
+```{r}
+cd8_comps = lapply(levels(cd8_data$Celltype), function(ct){
+  sub = subset(cd8_data, Celltype == ct)
+  pairwise = pairwise.wilcox.test(x = sub$percent_of_CD45, g = sub$combined, p.adjust.method = "none") %>% 
+    tidy() %>% 
+    dplyr::mutate(Celltype = ct) }) %>% 
+  bind_rows() %>% 
+  dplyr::mutate(padj = p.adjust(p.value, method = "fdr"),
+                padj_formatted = format(padj, digits = 3, scientific = T)) #%>% 
+  # dplyr::filter(padj < 0.05) %>% 
+  # group_by(Celltype) %>%
+  # dplyr::mutate(yval = seq(from = max(subset(cd8_data, Celltype == as.character(cur_group()))$percent_of_CD45, na.rm = T) * 1.05,
+  #                          by = max(subset(cd8_data, Celltype == as.character(cur_group()))$percent_of_CD45, na.rm = T) * 0.1,
+  #                          length.out = n())) %>%
+  # ungroup()
+
+#nothing significant
+```
+
+```{r, warning=FALSE}
+ma_tcell_plot = cd8_data %>% 
+  ggplot(aes(x = treatment, y = percent_of_CD45, fill = treatment)) +
+  facet_wrap(~ Celltype, scales = "free_y") +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.3) +
+  theme_bw(base_family = "Arial") +
+  theme(legend.position = "none",
+        axis.text.x = element_text(size = 12),
+        strip.text.x = element_text(size = 24),
+        axis.title.y = element_text(size = 18),
+        axis.title.x = element_text(size = 18)) +
+  labs(x = "Influenza A Group", y = "Percent of Live, CD45+ Singlets") +
+  scale_fill_npg() #+
+  # geom_signif(data = tcell_comps_combined,
+  #             aes(xmin = group1, xmax = group2, annotations = padj_formatted, y_position = yval),
+  #             inherit.aes = F,
+  #             tip_length = 0,
+  #             manual = T)
+
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 9,
+    height = 5, 
+    family = "Arial")
+ma_tcell_plot
+dev.off()
+png([REDACTED_FILE_PATH]
+    width = 9,
+    height = 5, 
+    units = "in",
+    res = 300,
+    family = "Arial")
+ma_tcell_plot
+dev.off()
+
+saveRDS(ma_tcell_plot, [REDACTED_FILE_PATH]
+
+ma_tcell_plot
+```      

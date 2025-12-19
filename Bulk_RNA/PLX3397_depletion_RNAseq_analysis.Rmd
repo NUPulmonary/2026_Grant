@@ -1,0 +1,882 @@
+```{r setup}
+library(DESeq2)
+library(tidyverse)
+library(parallel)
+library(doParallel)
+library(BiocParallel)
+library(pheatmap)
+library(readxl)
+library(uwot)
+library(factoextra)
+library(biomaRt)
+library(ggsci)
+library(Cairo)
+library(RPushbullet)
+library(WGCNA)
+library(RColorBrewer)
+library(lubridate)
+library(broom)
+library(ggsignif)
+library(fgsea)
+
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+
+
+registerDoParallel(makeCluster(12))
+register(MulticoreParam(12))
+
+set.seed(12345)
+
+pal = pal_nejm()(8)
+```
+
+```{bash eval=FALSE}
+#!/bin/bash
+#SBATCH -A [REDACTED_PROJECT_ALLOCATION]
+#SBATCH -p genomics
+#SBATCH -t 6:00:00
+#SBATCH -N 1
+#SBATCH --mem=48G
+#SBATCH --ntasks-per-node=12
+#SBATCH --mail-user=[REDACTED_EMAIL_URL]
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --job-name='[REDACTED_DATE_YYMMDD]depletion_bcl2fastq'
+
+module purge
+cd [REDACTED_FILE_PATH]
+module load bcl2fastq/2.19.1 #for compatibility with previous expts
+bcl2fastq --loading-threads 4 --writing-threads 4 --processing-threads 4
+```   
+
+```{r}
+#get samples from file names, link to mouse IDs
+ss = read_csv([REDACTED_FILE_PATH]
+              skip = 15, 
+              trim_ws = T)
+fastq_files = list.files(path = [REDACTED_FILE_PATH]
+                         full.names = T) %>% 
+   as_tibble() %>% 
+  #originally no column name, so add required one
+  dplyr::rename(fastq_1 = value) %>% 
+   #only single-end, so leave empty
+   mutate(fastq_2 = NA) %>% 
+  #location of the sample name in the file path
+   dplyr::mutate(Sample_ID = substring(text = fastq_1, 
+                                       first = regexpr(pattern = "AM_", text = fastq_1), 
+                                       last = (regexpr(pattern = "S\\d+_L00\\d", text = fastq_1) -  2))) %>% 
+   mutate(strandedness = "reverse") %>% 
+   #merge with sample sheet using "Sample_ID"
+   left_join(., ss) %>% 
+   dplyr::select(-contains("index"), -contains("sample", ignore.case = T)) %>% 
+   dplyr::rename(mouse = Description)
+
+#link with metadata from mouse IDs
+md = read_excel([REDACTED_FILE_PATH]
+                sheet = "Metadata") %>% 
+  mutate(mouse = paste(substring(cage, nchar(cage) - 3), tail_tag, sep = "_")) %>% 
+  right_join(., fastq_files) %>% 
+  mutate(group = factor(ifelse(mouse == "UMRNA", yes = "uRNA", no = group))) %>% 
+  mutate(group = factor(group),
+         cage = factor(cage),
+         age_group = factor(age_group),
+         chow = factor(chow),
+         DOB = as.Date(DOB),
+         takedown_date = as.Date(takedown_date),
+         age_at_takedown = interval(DOB, takedown_date) %/% months(1)) %>% 
+  dplyr::rename(sample = mouse) %>% 
+  dplyr::relocate(sample, fastq_1, fastq_2, strandedness) 
+
+write_csv(md,
+          [REDACTED_FILE_PATH]
+          na = "")
+```
+
+```{bash eval=FALSE}
+screen
+cd [REDACTED_FILE_PATH]
+module purge
+module load singularity
+module load graphviz/2.40.1
+
+
+nextflow run nf-core/rnaseq \
+-r '3.5' \
+-profile nu_genomics \
+--email '[REDACTED_EMAIL_URL]' \
+--three_prime_clip_r2 3 \
+--genome 'GRCm38' \
+-work-dir [REDACTED_FILE_PATH] \
+--input [REDACTED_FILE_PATH]
+```
+
+```{r}
+#import gene conversion
+#match scRNA with this version
+mouse_mart = useEnsembl(biomart = "genes", dataset =  "mmusculus_gene_ensembl", version = 110)
+mouse_conv = getBM(attributes = c("ensembl_gene_id", "external_gene_name"), mart = mouse_mart)
+
+#import des
+load([REDACTED_FILE_PATH] 
+dds = dds[, !(dds$sample %in% c("UMRNA"))] #remove URNA, which we know from multiQC clusters out
+tmp = colData(dds) %>% 
+   as.data.frame() %>% 
+   mutate(mouse = substring(text = sample, first = 2)) %>% 
+   dplyr::select(-sizeFactor)
+md_final = md %>% 
+   dplyr::select(-contains("fastq"), -strandedness) %>% 
+   unique()
+md_final = left_join(tmp, md_final, by = c("mouse" = "sample")) %>% 
+   column_to_rownames("sample") %>% 
+  dplyr::mutate(group = factor(as.character(group),
+                               levels = c("Control", "14-Day Depletion", "7-Day Repopulation", "30-Day Reintegration")),
+                combined = factor(paste(age_group, group, sep = ", "),
+                                  levels = c("Old, 30-Day Reintegration", "Old, 7-Day Repopulation",
+                                             "Old, 14-Day Depletion", "Old, Control",
+                                             "Young, 30-Day Reintegration", "Young, 7-Day Repopulation",
+                                             "Young, 14-Day Depletion", "Young, Control")))
+
+
+all(colnames(dds) == rownames(md_final)) #TRUE
+des = DESeqDataSetFromMatrix(countData = counts(dds, normalized = F), 
+                                  colData = md_final,
+                                  design = ~ combined)
+```   
+
+```{r}
+pca = plotPCA_manual(object = vst(des), 
+                     intgroup = "combined", 
+                     pcs = 4, 
+                     merge_metadata = TRUE,
+                     return_loadings = TRUE, 
+                     ntop = nrow(des),
+                     custom_annotation = mouse_conv)
+
+ggplot(pca$data, aes(x = PC1, y = PC2, color = group, shape = age_group)) +
+   geom_point(size = 3)  +
+   labs(x = paste0("PC1 (", pca$percent_var$percent_var[1], "% of variance explained)"),
+        y = paste0("PC2 (", pca$percent_var$percent_var[2], "% of variance explained)")) +
+   theme_bw(base_family = "Arial") +
+   scale_color_nejm()
+ggplot(pca$data, aes(x = PC2, y = PC3, color = group, shape = age_group)) +
+   geom_point(size = 3) +
+   labs(x = paste0("PC2 (", pca$percent_var$percent_var[2], "% of variance explained)"),
+        y = paste0("PC3 (", pca$percent_var$percent_var[3], "% of variance explained)")) +
+   theme_bw(base_family = "Arial") +
+   scale_color_nejm()
+ggplot(pca$data, aes(x = PC3, y = PC4, color = group, shape = age_group)) +
+   geom_point(size = 3) +
+   labs(x = paste0("PC3 (", pca$percent_var$percent_var[3], "% of variance explained)"),
+        y = paste0("PC4 (", pca$percent_var$percent_var[4], "% of variance explained)")) +
+   theme_bw(base_family = "Arial") +
+   scale_color_nejm()
+```  
+
+```{r}
+parametric = DESeq(des,
+                   fitType = "parametric",
+                   parallel = T)
+plotDispEsts(parametric) #realistically this is pretty good
+
+local = DESeq(des,
+              fitType = "local",
+              parallel = T)
+plotDispEsts(local) #modestly better, keep
+
+dge = local
+rm(local, parametric)
+```
+
+```{r}
+expression_sum = data.frame(mean_expression = rowSums(counts(dge, normalized = T), na.rm = T),
+                            CV = rowSds(counts(dge, normalized = T), na.rm = T) / rowMeans(counts(dge, normalized = T), na.rm = T))
+
+ggplot(expression_sum, aes(x = mean_expression + 0.5, y = CV)) +
+  geom_point(alpha = 0.1) +
+  geom_density2d() +
+  scale_x_log10() +
+  geom_vline(xintercept = 10, linetype = 2) +
+  geom_rug(alpha = 0.01)
+```
+
+```{r}
+expressed_genes = counts(dge, normalized = T) %>% 
+  as.data.frame() %>% 
+  .[rowSums(.) >= 10, ] %>% 
+  rownames()
+```
+
+```{r}
+umap_counts = counts(dge, normalized = TRUE) %>% 
+  .[expressed_genes, ] %>% 
+   t()
+all_pca = prcomp(umap_counts, center = T, scale. = T)
+fviz_eig(all_pca, 
+         barfill = "dodgerblue4", 
+         xlab = "Principal Component",
+         ylab = "Percent Variance Explained", 
+         main = "",
+         ncp = 50,
+         ggtheme = theme_bw(),
+         addlabels = T)
+```   
+
+```{r}
+set.seed(12345)
+umap_results = umap(umap_counts,
+                    pca = 6,
+                    pca_center = T,
+                    n_threads = 1,
+                    scale = "Z",
+                    min_dist = 0.2)
+rownames(umap_results) = rownames(umap_counts)
+colnames(umap_results) = c("UMAP1", "UMAP2")
+umap_results = umap_results %>% 
+   as_tibble(rownames = NA) %>% 
+   mutate(mouse = substring(rownames(.), 2)) %>% 
+   left_join(., md_final) 
+```
+
+```{r}
+ggplot(umap_results, aes(x = UMAP1, y = UMAP2, color = group, shape = age_group)) +
+   geom_point(size = 5) +
+   theme_bw(base_family = "Arial") +
+   scale_color_nejm()
+```   
+
+```{r}
+csf1r = get_tidy_counts(dge, goi = "Csf1r", goi_format = "external_gene_name", custom_annotation = mouse_conv)
+
+ggplot(csf1r, aes(x = group, y = counts, fill = age_group)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, seed = 12345)) +
+  theme_bw() +
+  scale_fill_npg() +
+  labs(x = "group", y = "Csf1r Counts")
+```
+
+```{r}
+mertk = get_tidy_counts(dge, goi = "Mertk", goi_format = "external_gene_name", custom_annotation = mouse_conv)
+
+ggplot(mertk, aes(x = group, y = counts, fill = age_group)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, seed = 12345)) +
+  theme_bw() +
+  scale_fill_npg() +
+  labs(x = "group", y = "Mertk Counts")
+```
+
+```{r}
+f480 = get_tidy_counts(dge, goi = "Adgre1", goi_format = "external_gene_name", custom_annotation = mouse_conv)
+
+ggplot(f480, aes(x = group, y = counts, fill = age_group)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, seed = 12345)) +
+  theme_bw() +
+  scale_fill_npg() +
+  labs(x = "group", y = "Adgre1 Counts")
+```
+
+```{r}
+aging_res = results(dge, contrast = c("combined", "Old, Control", "Young, Control"), alpha = 0.05, parallel = T)
+
+aging_hits = aging_res %>% 
+  id_convert(., custom_annotation = mouse_conv) %>% 
+  dplyr::filter(padj < 0.05) %>% 
+  dplyr::arrange(desc(log2FoldChange))
+
+goi_aging = aging_hits %>% 
+  dplyr::filter(grepl("^Il|^Ccl|^Cxcl|^Irf|^Ifi|^Ifn|^Oas|^Mx|^Csf|^H2\\-", external_gene_name) | 
+                        external_gene_name %in% c("Mertk","Hif1a", "App", "Spp1", "Mki67", "P2ry12",
+                                                  "Apoe", "Axl", "Clec7a", "Cx3cr1",
+                                                  "Lgals3", "Tmem119", "B2m", "Ass1", "Uba52",
+                                                  "Evi2b", "Bin2", "Lpl", "Dgat2", "Plce1", "Synj2",
+                                                  "Acacb", "Elovl6", "Ch25h", "Soat1",
+                                                  "Anpep", "Got1", "Naalad2",
+                                                  "Pkm", "Eno1", "Pgam1", "Pgk1",
+                                                  "Gstm", "Enpp1", 
+                                                  "Hexb", "Man1a", "Man2a2", "St3gal6", "Mgea5", "B4galt4",
+                                                  "Cspg4", "Gpnmb", "Mmp12", 
+                                                  "Cd22")) %>% 
+  .$external_gene_name
+
+aging_ma = pretty_MA_plot(aging_res, genes = c(goi_aging, "Mertk"), custom_annotation = mouse_conv, max_overlaps = 100) +
+  ylim(-5,5) +
+  theme_bw(base_family = "Arial") +
+  theme(legend.position = "none")
+
+CairoPDF([REDACTED_FILE_PATH]
+    width = 12,
+    height = 8,
+    family = "Arial")
+aging_ma
+dev.off()
+
+CairoPNG([REDACTED_FILE_PATH]
+    width = 12,
+    height = 8,
+    res = 300,
+    units = "in",
+    family = "Arial")
+aging_ma
+dev.off()
+```   
+
+```{r}
+repop_young_res = results(dge, contrast = c("combined", "Old, 30-Day Reintegration", "Young, Control"), alpha = 0.05, parallel = T)
+
+repop_young_hits = repop_young_res %>% 
+  id_convert(., custom_annotation = mouse_conv) %>% 
+  dplyr::filter(padj < 0.05) %>% 
+  dplyr::arrange(desc(log2FoldChange))
+
+goi_repop_young = repop_young_hits %>% 
+  dplyr::filter(grepl("^Il|^Ccl|^Cxcl|^Irf|^Ifi|^Ifn|^Oas|^Mx|^Csf|^H2\\-", external_gene_name) | 
+                        external_gene_name %in% c("Mertk","Hif1a", "App", "Spp1", "Mki67", "P2ry12",
+                                                  "Apoe", "Axl", "Clec7a", "Cx3cr1",
+                                                  "Lgals3", "Tmem119", "B2m", "Ass1", "Uba52",
+                                                  "Evi2b", "Bin2", "Lpl", "Dgat2", "Plce1", "Synj2",
+                                                  "Acacb", "Elovl6", "Ch25h", "Soat1",
+                                                  "Anpep", "Got1", "Naalad2",
+                                                  "Pkm", "Eno1", "Pgam1", "Pgk1",
+                                                  "Gstm", "Enpp1", 
+                                                  "Hexb", "Man1a", "Man2a2", "St3gal6", "Mgea5", "B4galt4",
+                                                  "Cspg4", "Gpnmb", "Mmp12", 
+                                                  "Cd22")) %>% 
+  .$external_gene_name
+
+repop_young_ma = pretty_MA_plot(repop_young_res, genes = c(goi_repop_young, "Mertk"), custom_annotation = mouse_conv, max_overlaps = 100) +
+  ylim(-5,5) +
+  theme_bw(base_family = "Arial") +
+  theme(legend.position = "none")
+
+CairoPDF([REDACTED_FILE_PATH]
+    width = 12,
+    height = 8,
+    family = "Arial")
+repop_young_ma
+dev.off()
+
+CairoPNG([REDACTED_FILE_PATH]
+    width = 12,
+    height = 8,
+    res = 300,
+    units = "in",
+    family = "Arial")
+repop_young_ma
+dev.off()
+```
+
+```{r}
+complete_elbow = k_elbow(dge, design = "~ combined", cores = 12)
+complete_elbow
+```   
+
+```{r eval=FALSE}
+kmeans_complete = k_means_figure(dge = dge,
+                                 design = "~ combined",
+                                 fitType = "local",
+                                 k = 8,
+                                 go_annotations = "org.Mm.eg.db",
+                                 ensembl_db = "mmusculus_gene_ensembl",
+                                 legend_factors = c("group", "age_group"),
+                                 breaks = seq(-3, 3, length.out=101),
+                                 cores = 1,
+                                 return_genes = T,
+                                 display_go_terms = F,
+                                 return_go_terms = T,
+                                 cluster_columns = T,
+                                 show_rownames = F,
+                                 qval_cutoff = 0.05,
+                                 tidy_go = T,
+                                 annotation_colors = list(group = c("Control" = pal[4],
+                                                                    "14-Day Depletion" = pal[3],
+                                                                     "7-Day Repopulation" = pal[5],
+                                                                     "30-Day Reintegration" = pal[6]),
+                                                          age_group = c("Old" = pal[1],
+                                                                        "Young" = pal[2])))
+
+saveRDS(kmeans_complete, [REDACTED_FILE_PATH]
+write.csv(kmeans_complete$genes,  [REDACTED_FILE_PATH]
+write.csv(kmeans_complete$GO,  [REDACTED_FILE_PATH]
+
+pbPost(title = "k means complete")
+```   
+
+```{r}
+kmeans = readRDS([REDACTED_FILE_PATH]
+kmeans$plot
+
+CairoPDF([REDACTED_FILE_PATH] 
+         width = 8,
+         height = 6)
+kmeans$plot
+dev.off()
+
+CairoPNG([REDACTED_FILE_PATH] 
+         width = 8,
+         height = 6, 
+         res = 300,
+         units = "in")
+kmeans$plot
+dev.off()
+```
+
+```{r}
+old_repop_res = results(dge, contrast = c("combined", "Old, 7-Day Repopulation", "Old, Control"), alpha = 0.05, parallel = T)
+
+old_repop_hits = old_repop_res %>% 
+  id_convert(., custom_annotation = mouse_conv) %>% 
+  dplyr::filter(padj < 0.05) %>% 
+  dplyr::arrange(desc(log2FoldChange))
+
+goi_repop = old_repop_hits %>% 
+  dplyr::filter(grepl("^Il|^Ccl|^Cxcl|^Irf|^Ifi|^Ifn|^Oas|^Mx|^Csf|^H2\\-|^Rp[ls]|^E[ei]f", external_gene_name) | 
+                        external_gene_name %in% c("Mertk","Hif1a", "App", "Spp1", "Mki67", "P2ry12",
+                                                  "Apoe", "Axl", "Clec7a", "Cx3cr1",
+                                                  "Lgals3", "Tmem119", "B2m", "Ass1", "Uba52",
+                                                  "Evi2b", "Bin2", "Lpl", "Dgat2", "Plce1", "Synj2",
+                                                  "Acacb", "Elovl6", "Ch25h", "Soat1",
+                                                  "Anpep", "Got1", "Naalad2",
+                                                  "Pkm", "Eno1", "Pgam1", "Pgk1",
+                                                  "Gstm", "Enpp1", 
+                                                  "Hexb", "Man1a", "Man2a2", "St3gal6", "Mgea5", "B4galt4",
+                                                  "Cspg4", "Gpnmb", "Mmp12", 
+                                                  "Cd22",
+                                                  "Igf2", "Tgfb", "Smad4", "Creb1", 
+                                                  "Adgre1", "Itgam", "Sting1", "Il7r")) %>% 
+  .$external_gene_name
+
+old_repop_ma = pretty_MA_plot(old_repop_res, genes = c(goi_repop), custom_annotation = mouse_conv, max_overlaps = 50, label_alpha = 0.5) +
+  ylim(-6, 6) +
+  theme_bw(base_family = "Arial") +
+  theme(legend.position = "none")
+
+old_repop_ma
+
+
+CairoPDF([REDACTED_FILE_PATH]
+    width = 12,
+    height = 8,
+    family = "Arial")
+old_repop_ma
+dev.off()
+
+CairoPNG([REDACTED_FILE_PATH]
+    width = 12,
+    height = 8,
+    res = 300,
+    units = "in",
+    family = "Arial")
+old_repop_ma
+dev.off()
+```   
+
+```{r}
+pairwise = get_pairwise_DESeq(dge, comparison_col = "combined", fit_type = "local", 
+                              sort_direction = "factor_order", df_output = T, 
+                              save_csv = T, cores = 12, 
+                              output_directory = [REDACTED_FILE_PATH]
+                              custom_annotation = mouse_conv)
+```
+
+```{r}
+old_reint_res = results(dge, contrast = c("combined", "Old, 30-Day Reintegration", "Old, Control"), alpha = 0.05, parallel = T)
+
+old_reint_hits = old_reint_res %>% 
+  id_convert(., custom_annotation = mouse_conv) %>% 
+  dplyr::filter(padj < 0.05) %>% 
+  dplyr::arrange(desc(log2FoldChange))
+
+goi_reint = old_reint_hits %>% 
+  dplyr::filter(grepl("^Il|^Ccl|^Cxcl|^Irf|^Ifi|^Ifn|^Oas|^Mx|^Csf|^H2\\-|^Rp[ls]|^E[ei]f", external_gene_name) | 
+                        external_gene_name %in% c("Mertk","Hif1a", "App", "Spp1", "Mki67", "P2ry12",
+                                                  "Apoe", "Axl", "Clec7a", "Cx3cr1",
+                                                  "Lgals3", "Tmem119", "B2m", "Ass1", "Uba52",
+                                                  "Evi2b", "Bin2", "Lpl", "Dgat2", "Plce1", "Synj2",
+                                                  "Acacb", "Elovl6", "Ch25h", "Soat1",
+                                                  "Anpep", "Got1", "Naalad2",
+                                                  "Pkm", "Eno1", "Pgam1", "Pgk1",
+                                                  "Gstm", "Enpp1", 
+                                                  "Hexb", "Man1a", "Man2a2", "St3gal6", "Mgea5", "B4galt4",
+                                                  "Cspg4", "Gpnmb", "Mmp12", 
+                                                  "Cd22", 
+                                                  "Adgre1", "Itgam", "Sting1", "Atf4",
+                                                  "Klf6", "Lyve1", "Il6", "Ccr2", "Gas6")) %>% 
+  .$external_gene_name
+
+old_reint_ma = pretty_MA_plot(old_reint_res, custom_annotation = mouse_conv, max_overlaps = 50, label_alpha = 0.5) +
+  ylim(-6, 6) +
+  theme_bw(base_family = "Arial") +
+  theme(legend.position = "none")
+
+old_reint_ma
+
+
+CairoPDF([REDACTED_FILE_PATH]
+    width = 9,
+    height = 6,
+    family = "Arial")
+old_reint_ma
+dev.off()
+
+CairoPNG([REDACTED_FILE_PATH]
+    width = 9,
+    height = 6,
+    res = 300,
+    units = "in",
+    family = "Arial")
+old_reint_ma
+dev.off()
+```   
+
+```{r}
+#reverse leveling for plotting
+dge$combined = factor(dge$combined, levels = c("Young, Control", "Young, 14-Day Depletion", 
+                                               "Young, 7-Day Repopulation", "Young, 30-Day Reintegration",
+                                               "Old, Control", "Old, 14-Day Depletion",
+                                               "Old, 7-Day Repopulation", "Old, 30-Day Reintegration"))
+aging_markers = c("Cd9", "Apoe", "Lpl", "Cst7", "Itgax", "Spp1", "Ccl12", "Ifit2", "Ifit3", "Ifi204", "Oasl2", "Trim30a")
+aging_marker_counts = get_tidy_counts(dge, goi = aging_markers, 
+                                 custom_annotation = mouse_conv, goi_format = "external_gene_name") %>% 
+  dplyr::mutate(external_gene_name = factor(external_gene_name,
+                                            levels = c("Apoe", "Cd9", "Cst7", "Itgax", "Lpl", "Spp1",
+                                                        "Ccl12", "Ifit2", "Ifit3", "Ifi204", "Oasl2", "Trim30a")))
+
+#get comparisons from pairwise DESeq
+max_counts = aging_marker_counts %>% 
+  group_by(external_gene_name) %>% 
+  dplyr::summarize(max_counts = max(counts)) %>% 
+  ungroup()
+#join together all hits
+pairwise_comps = lapply(names(pairwise$hits), function(comp){
+  comp_split = str_split(comp, pattern = "_over_") %>% 
+    unlist()
+  out = pairwise$hits[[comp]] %>% 
+    dplyr::mutate(group1 = gsub("combined_", "", comp_split[1]),
+                  group2 = comp_split[2])
+  return(out) }) %>% 
+  bind_rows()
+
+pairwise_comps_aging = pairwise_comps %>% 
+  left_join(., max_counts) %>% 
+  #remove irrelevant comparisons
+  #keep within age-group comparisons and across age group by treatment
+  dplyr::filter(((substring(group1, 1, (regexpr(", ", group1) - 1)) !=
+                  substring(group2, 1, (regexpr(", ", group2) - 1))) &
+                  (substring(group1, (regexpr(", ", group1) + 1)) ==
+                  substring(group2, (regexpr(", ", group2) + 1)))) |
+                  (substring(group1, 1, (regexpr(", ", group1) - 1)) ==
+                  substring(group2, 1, (regexpr(", ", group2) - 1)))) %>% 
+  dplyr::filter(padj < 0.05 & external_gene_name %in% aging_markers) %>% 
+  group_by(external_gene_name) %>% 
+  dplyr::mutate(yval = seq(from = unique(max_counts) * 1.07, 
+                           by = unique(max_counts) * 0.07, 
+                           length.out = n())) %>% 
+  ungroup() %>% 
+  dplyr::mutate(annot = format(padj, scientific = T, digits = 2),
+                external_gene_name = factor(external_gene_name,
+                                            levels = c("Apoe", "Cd9", "Cst7", "Itgax", "Lpl", "Spp1", 
+                                                        "Ccl12", "Ifit2", "Ifit3", "Ifi204", "Oasl2", "Trim30a")),
+                group1 = factor(group1,
+                                levels = c("Young, Control", "Young, 14-Day Depletion", 
+                                               "Young, 7-Day Repopulation", "Young, 30-Day Reintegration",
+                                               "Old, Control", "Old, 14-Day Depletion",
+                                               "Old, 7-Day Repopulation", "Old, 30-Day Reintegration")),
+                group2 = factor(group2,
+                                levels = c("Young, Control", "Young, 14-Day Depletion", 
+                                               "Young, 7-Day Repopulation", "Young, 30-Day Reintegration",
+                                               "Old, Control", "Old, 14-Day Depletion",
+                                               "Old, 7-Day Repopulation", "Old, 30-Day Reintegration")))
+```
+
+```{r}
+aging_marker_boxplots = ggplot(aging_marker_counts, aes(x = combined, y = counts, fill = age_group)) +
+  facet_wrap(~external_gene_name, scales = "free_y") +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.2) +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        strip.text.x = element_text(size = 24),
+        axis.title.y = element_text(size = 18),
+        plot.margin = margin(t = 5.5, r = 5.5, b = 5.5, l = 55, unit = "pt")) +
+  scale_fill_npg() +
+  labs(x = "", y = "Counts") +
+  geom_signif(inherit.aes = F, 
+              data = pairwise_comps_aging,
+              aes(xmin = group1, xmax = group2, annotations = annot, y_position = yval),
+              tip_length = 0,
+              textsize = 2, 
+              manual=TRUE)  +
+  scale_x_discrete(drop = FALSE) 
+
+CairoPDF([REDACTED_FILE_PATH]
+    width = 12,
+    height = 14,
+    family = "Arial")
+aging_marker_boxplots
+dev.off()
+CairoPNG([REDACTED_FILE_PATH]
+    width = 12,
+    height = 14,
+    units = "in",
+    res = 300,
+    family = "Arial")
+aging_marker_boxplots
+dev.off()
+
+saveRDS(aging_marker_boxplots, [REDACTED_FILE_PATH]
+
+aging_marker_boxplots
+```
+
+```{r warning=FALSE}
+dam_genes = read_excel([REDACTED_FILE_PATH]
+                       skip = 1,
+                       col_names = c("external_gene_name",
+                                     "UMI_per_cell_homeostatic",
+                                     "Log2FC_DAM_over_homeostatic",
+                                     "P_p",
+                                     "P_fdr"), 
+                       col_types = c("text",
+                                     "numeric",
+                                     "numeric",
+                                     "numeric",
+                                     "numeric")) %>% 
+  #calculated their FDR values wrong? ~Double what I'm seeing, but tightly correlated
+  dplyr::mutate(pval = 10 ^ -P_p,
+                fdr_original = 10 ^ -P_fdr,
+                padj = p.adjust(pval, method = "fdr"),
+                UMI_DAM = UMI_per_cell_homeostatic * 2 ^ Log2FC_DAM_over_homeostatic) %>% 
+  #only want positive hits for this purpose, and pick genes with reasonable expression
+  dplyr::filter(padj < 0.05 & 
+                  Log2FC_DAM_over_homeostatic > 0 & 
+                  UMI_DAM >= 0.5 & 
+                  !grepl("^Rpl|^Rps|^Mt-", external_gene_name)) %>% 
+  inner_join(., mouse_conv) %>% 
+  dplyr::mutate(gene_list = "DAM Markers\n(Keren-Schaul et al., 2017)")
+
+nrow(dam_genes) #169
+```   
+
+```{r}
+mouse_hallmark = gmtPathways([REDACTED_FILE_PATH]
+ifna_response = data.frame(external_gene_name = mouse_hallmark$HALLMARK_INTERFERON_ALPHA_RESPONSE) %>% 
+  left_join(., mouse_conv) %>% 
+  dplyr::mutate(gene_list = "Hallmark Interferon Alpha Response\n(MM3877)")
+
+ifng_response = data.frame(external_gene_name = mouse_hallmark$HALLMARK_INTERFERON_GAMMA_RESPONSE) %>% 
+  left_join(., mouse_conv) %>% 
+  dplyr::mutate(gene_list = "Hallmark Interferon Gamma Response\n(MM3878)")
+
+modules = bind_rows(dam_genes, ifna_response, ifng_response) %>% 
+  dplyr::mutate(gene_list = factor(gene_list)) %>% 
+  dplyr::filter(!is.na(ensembl_gene_id)) %>% 
+  dplyr::select(ensembl_gene_id, external_gene_name, gene_list)
+```
+
+```{r}
+module_counts = get_tidy_counts(dge, 
+                                goi = unique(modules$ensembl_gene_id), 
+                                goi_format = "ensembl_gene_id", 
+                                custom_annotation = mouse_conv) %>% 
+  left_join(., modules) %>% 
+  group_by(mouse, combined, age_group, gene_list) %>% 
+  dplyr::summarize(summed_counts = sum(counts, na.rm = T)) %>% 
+  ungroup()
+```
+
+```{r}
+ggplot(module_counts, aes(x = summed_counts)) +
+  geom_histogram() +
+  facet_wrap(~gene_list, scales = "free_x")
+
+shapiro.test(subset(module_counts, gene_list == "DAM Markers\n(Keren-Schaul et al., 2017)")$summed_counts)
+shapiro.test(subset(module_counts, gene_list == "Hallmark Interferon Alpha Response\n(MM3877)")$summed_counts)
+```   
+
+```{r}
+module_comps = lapply(unique(module_counts$gene_list), function(list){
+  sub = subset(module_counts, gene_list == list)
+  comps = pairwise.t.test(x = sub$summed_counts, g = sub$combined, 
+                                       p.adjust.method = "none") %>%
+    tidy() %>% 
+    dplyr::mutate(gene_list = list,
+                  max_y = max(sub$summed_counts)) }) %>% 
+  bind_rows() %>% 
+  #remove irrelevant comparisons
+  #keep within age-group comparisons and across age group by treatment
+  dplyr::filter(((substring(group1, 1, (regexpr(", ", group1) - 1)) !=
+                  substring(group2, 1, (regexpr(", ", group2) - 1))) &
+                  (substring(group1, (regexpr(", ", group1) + 1)) ==
+                  substring(group2, (regexpr(", ", group2) + 1)))) |
+                  (substring(group1, 1, (regexpr(", ", group1) - 1)) ==
+                  substring(group2, 1, (regexpr(", ", group2) - 1)))) %>%
+  dplyr::mutate(padj = p.adjust(p.value, method = "fdr")) %>% 
+  dplyr::filter(padj < 0.05) %>% 
+  group_by(gene_list) %>% 
+  dplyr::mutate(yval = seq(from = first(max_y), 
+                           by = first(max_y) * 0.03, 
+                           length.out = n()),
+                annot = format(padj, scientific = T, digits = 2),
+                group1 = factor(group1,
+                                levels = c("Young, Control", "Young, 14-Day Depletion", 
+                                               "Young, 7-Day Repopulation", "Young, 30-Day Reintegration",
+                                               "Old, Control", "Old, 14-Day Depletion",
+                                               "Old, 7-Day Repopulation", "Old, 30-Day Reintegration")),
+                group2 = factor(group2,
+                                levels = c("Young, Control", "Young, 14-Day Depletion", 
+                                               "Young, 7-Day Repopulation", "Young, 30-Day Reintegration",
+                                               "Old, Control", "Old, 14-Day Depletion",
+                                               "Old, 7-Day Repopulation", "Old, 30-Day Reintegration"))) %>% 
+  ungroup()
+```
+
+```{r}
+module_counts_plot = ggplot(module_counts, aes(x = combined, y = summed_counts, fill = age_group)) +
+  facet_wrap(~gene_list, scales = "free_y") +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2), size = 0.5) +
+  theme_bw() +
+  scale_fill_npg() +
+  labs(x = "", y = "Summed Module Expression (Counts)") +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        strip.text.x = element_text(size = 16),
+        axis.title.y = element_text(size = 18)) +
+  geom_signif(inherit.aes = F, 
+              data = module_comps,
+              aes(xmin = group1, xmax = group2, annotations = annot, y_position = yval),
+              tip_length = 0,
+              textsize = 5, 
+              manual=TRUE) 
+
+CairoPDF([REDACTED_FILE_PATH]
+    width = 12,
+    height = 6,
+    family = "Arial")
+module_counts_plot
+dev.off()
+
+saveRDS(module_counts_plot, [REDACTED_FILE_PATH]
+
+module_counts_plot
+```
+
+```{r}
+slco2b1 = get_tidy_counts(dge, goi = c("Slco2b1", "P2ry12"), custom_annotation = mouse_conv, goi_format = "external_gene_name")
+
+ggplot(slco2b1, aes(x = group, y = counts, fill = age_group)) +
+  facet_wrap(~external_gene_name, scales = "free_y") +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, seed = 12345)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  scale_fill_npg() +
+  labs(x = "", y = "Counts")
+```
+
+```{r}
+dea_dfs = pairwise$hits
+names(dea_dfs) = names(dea_dfs) %>% 
+  gsub("combined_", "", .) %>% 
+  gsub("Young", "Y", .) %>% 
+  gsub("Old", "O", .) %>% 
+  gsub("_over_", " vs ", .) %>% 
+  gsub("Reintegration", "Reint", .) %>% 
+  gsub("Repopulation", "Repop", .) %>% 
+  gsub("Control", "Ctrl", .) %>% 
+  gsub("Depletion", "Depl", .) %>% 
+  gsub("-Day", "D", .)
+```
+
+```{r}
+km = read.csv([REDACTED_FILE_PATH] %>% 
+  dplyr::select(-X) %>% 
+  dplyr::rename(ensembl_gene_id = gene)
+```
+
+```{r}
+dea_dfs[["k-Means Genes"]] = km
+
+openxlsx::write.xlsx(dea_dfs, [REDACTED_FILE_PATH]
+```
+
+```{bash eval=FALSE}
+cd [REDACTED_FILE_PATH]
+mkdir merged_fastqs
+cd merged_fastqs
+
+prefix=/gpfs[REDACTED_FILE_PATH]
+j=1
+for i in {0001..0036}
+do 
+  cur_files=${prefix}${i}_S${j}*'_R1_001.fastq.gz'
+  echo $cur_files
+  out_file='AM_22_'${i}_S${j}'_merged_R1_001.fastq.gz'
+  echo $out_file
+  cat $cur_files > $out_file
+  ((j++))
+done
+```
+
+```{r}
+counts(dge, normalized = F) %>% 
+  as.data.frame() %>% 
+  write_csv(., [REDACTED_FILE_PATH]
+
+filenames = md %>% 
+  #handle concatenation
+  dplyr::mutate(filename = basename(fastq_1),
+                filename = gsub("L00\\d", "merged", filename)) %>% 
+  dplyr::select(sample, filename) %>% 
+  unique()
+
+geo_md = colData(dge) %>% 
+  as.data.frame() %>% 
+  dplyr::rename(age_months = age_at_takedown,
+                sample = mouse) %>% 
+  dplyr::mutate(genotype = "C57BL/6J",
+                sex = "Male",
+                days_on_PLX3397 = ifelse(grepl("Control", group),
+                                         0,
+                                         14),
+                days_post_withdrawal = case_when(grepl("7", group) ~ 7,
+                                                 grepl("30", group) ~ 30,
+                                                 grepl("14", group) ~ 0,
+                                                 TRUE ~ NA_integer_),
+                combined = gsub(" |, ", "_", combined),
+                sample = gsub("^X", "", sample)) %>% 
+  dplyr::select(sample, age_months, genotype, age_group, sex, days_on_PLX3397, days_post_withdrawal, combined) %>% 
+  group_by(combined) %>% 
+  dplyr::mutate(title = paste(combined, seq(from = 1, to = n()), sep = "_")) %>% 
+  left_join(., filenames)
+
+write_csv(geo_md, [REDACTED_FILE_PATH]
+
+#cleaned version for pairing with counts
+geo_md %>% 
+  dplyr::select(-c(filename, title)) %>% 
+  write_csv(., [REDACTED_FILE_PATH]
+```   
+
+```{r}
+merged_fastqs = list.files([REDACTED_FILE_PATH]
+                           pattern = "fastq\\.gz",
+                           full.names = TRUE)
+md5s = data.frame(path = c(merged_fastqs, 
+                           [REDACTED_FILE_PATH] 
+                           [REDACTED_FILE_PATH] %>% 
+dplyr::mutate(md5 = tools::md5sum(path),
+              basename = basename(path)) %>% 
+dplyr::select(path, basename, md5) %>% 
+  dplyr::filter(basename %in% geo_md$filename |
+                  grepl("\\.csv", basename))
+
+write_csv(md5s, [REDACTED_FILE_PATH]
+```   

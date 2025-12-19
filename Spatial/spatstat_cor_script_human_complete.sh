@@ -1,0 +1,15 @@
+#!/bin/bash
+#SBATCH -A [REDACTED_PROJECT_ALLOCATION]
+#SBATCH -p [REDACTED_PROJECT_ALLOCATION]
+#SBATCH -t 4:00:00
+#SBATCH -N 1
+#SBATCH --mem=300G
+#SBATCH --ntasks-per-node=24
+#SBATCH --mail-user=[REDACTED_EMAIL_URL]
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --job-name="[REDACTED_DATE_YYMMDD]spatstat_cor_complete"
+
+module load R/4.4.0
+
+cd [REDACTED_FILE_PATH]
+Rscript [REDACTED_FILE_PATH]

@@ -1,0 +1,110 @@
+```{r}
+library(Seurat)
+library(future)
+library(tidyverse)
+library(reticulate)
+library(RPushbullet)
+library(parallel)
+
+#future
+plan("multisession", workers = 1)
+options(future.globals.maxSize = 40 * 1e3 * 1024^2) #40gb
+
+#helper functions
+source([REDACTED_FILE_PATH]
+```
+
+```{r}
+brain_dirs_baysor = c(list.dirs([REDACTED_FILE_PATH]
+                              recursive = FALSE),
+                      list.dirs([REDACTED_FILE_PATH]
+                                recursive = FALSE))
+names(brain_dirs_baysor) = basename(brain_dirs_baysor)
+
+#filter down to just superagers and controls
+keep = read.csv([REDACTED_FILE_PATH]
+              na.strings = c("")) %>% 
+  dplyr::filter(!grepl("PPA", condition) &
+              Region == "MFG") %>% 
+  .$fsm_filepath
+brain_dirs_baysor = brain_dirs_baysor[keep]
+
+#just use output from import-segmentation run
+xeniae = lapply(brain_dirs_baysor, function(dir){
+  sample_name = basename(dir)
+  cur_dataset = LoadXenium(data.dir = paste0(dir, "/Baysor_legacy_0pt5/Resegmentation_0pt5/outs"),
+                           fov = sample_name,
+                           mols.qv.threshold = 20)
+  return(cur_dataset) })
+names(xeniae) = names(brain_dirs_baysor)
+
+complete = merge(xeniae[[1]], xeniae[2:length(xeniae)], add.cell.ids = names(xeniae))
+rm(xeniae)
+gc()
+```
+
+```{r}
+ggplot(complete@meta.data, aes(x = nCount_Xenium)) +
+  geom_histogram(bins = 100) + 
+  scale_x_log10() +
+  geom_vline(xintercept = 12, linetype = 2)
+
+ggplot(complete@meta.data, aes(x = nFeature_Xenium)) +
+  geom_histogram(bins = 100) + 
+  scale_x_log10() +
+  geom_vline(xintercept = 10, linetype = 2)
+```
+
+```{r}
+complete = subset(complete, nFeature_Xenium >= 10 & nCount_Xenium >= 12)
+dim(complete)
+```
+
+```{r}
+plan("multisession", workers = 1)
+complete = SCTransform(complete, assay = "Xenium", vst.flavor = "v2")
+```   
+
+```{r}
+complete = RunPCA(complete, npcs = 50, verbose = TRUE)
+ElbowPlot(complete, ndims = 50)
+```
+
+```{r}
+complete = RunUMAP(complete, dims = 1:16, verbose = FALSE)
+complete = FindNeighbors(complete, dims = 1:16, verbose = TRUE)
+complete = FindClusters(complete, resolution = 0.8, verbose = TRUE)
+
+complete_markers = FindAllMarkers(complete, recorrect_umi=FALSE)
+complete_markers = complete_markers %>% 
+  dplyr::arrange(cluster, desc(avg_log2FC))
+write_csv(complete_markers, [REDACTED_FILE_PATH]
+
+DimPlot(complete, label = TRUE) +
+  theme(legend.position = "none")
+VlnPlot(complete, c("nCount_SCT", "nFeature_SCT"), pt.size = 0)
+```   
+
+```{r}
+wm_files = list.files([REDACTED_FILE_PATH]
+                      pattern = "cells.csv",
+                      full.names = TRUE)
+wm = lapply(wm_files, function(file){
+  prefix = gsub("_cells.csv", "", basename(file))
+  cells = read_csv(file, skip = 2) %>% 
+    .$`Cell ID` %>%
+    paste(prefix, ., sep = "_") }) %>% 
+  unlist()
+
+tissue_type = factor(ifelse(colnames(complete) %in% wm,
+                            yes = "White Matter", 
+                            no = "Gray Matter"))
+
+complete = AddMetaData(complete, metadata = tissue_type, col.name = "tissue_type")
+table(complete$tissue_type)
+```
+
+```{r}
+saveRDS(complete, [REDACTED_FILE_PATH]
+pbPost(type = "note", title = "Normalization completed and object saved")
+```

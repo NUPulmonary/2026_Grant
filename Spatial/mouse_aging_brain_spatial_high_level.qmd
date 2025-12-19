@@ -1,0 +1,1271 @@
+```{r setup, message=FALSE, warning=FALSE, results='hide'}
+dyn.load([REDACTED_FILE_PATH]
+
+library(dplyr)
+library(ggplot2)
+library(ggsci)
+library(ggpubr)
+library(broom)
+library(spatstat.geom)
+library(spatstat.explore)
+library(GET)
+library(tibble)
+library(Seurat)
+library(ComplexHeatmap)
+library(circlize)
+library(DESeq2)
+library(tidyr)
+library(readr)
+library(magick)
+library(patchwork)
+library(forcats)
+library(readxl)
+library(ggrastr)
+
+npg_pal = pal_npg()(9)
+npg_pal_long = colorRampPalette(pal_npg()(9))(27)
+set.seed(12345)
+npg_pal_long = sample(npg_pal_long) #shuffle
+
+age_pal = c("Old" = npg_pal[1],
+             "Young" = npg_pal[2])
+nejm_pal = pal_nejm()(8)
+
+source([REDACTED_FILE_PATH]
+```
+
+```{r}
+complete = readRDS([REDACTED_FILE_PATH]
+complete$typestate = factor(as.character(complete$typestate))
+complete = NormalizeData(complete, assay = "Xenium") # for heatmaps only
+```
+
+```{r}
+umap = DimPlot(complete, group.by = "celltype", raster = TRUE, raster.dpi = c(10*600, 10*600),
+                     label = TRUE, label.box = TRUE, repel = TRUE, pt.size = 2, label.size = 10) +
+  NoLegend() +
+  scale_fill_manual(values = rep("white", 27)) +
+  scale_color_manual(values = alpha(npg_pal_long, 0.4)) +
+  ggtitle("") +
+  labs(x = "UMAP 1", y = "UMAP 2")
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 10,
+          height = 10)
+umap
+dev.off()
+
+umap
+```
+
+```{r}
+markers = complete@misc$markers %>% 
+  group_by(cluster) %>% 
+  slice_head(n = 3) %>% 
+  ungroup() %>% 
+  .$gene %>% 
+  c(.) %>% 
+  unique() 
+
+marker_counts = AverageExpression(complete, 
+                                  features = markers, 
+                                  group.by = "typestate",
+                                  assay = "Xenium",
+                                  layer = "data") %>% 
+  .$Xenium %>% 
+  as.matrix() %>% 
+  t() %>% 
+  scale() %>% 
+  t()
+
+celltype_colors = colorRampPalette(pal_npg()(9))(26)
+names(celltype_colors) = unique(complete$celltype)
+md = data.frame(col = colnames(marker_counts)) %>% 
+  dplyr::mutate(`Cell Type` = ifelse(grepl(",", col),
+                                     yes = substring(col, 1, regexpr(",", col) - 1),
+                                     no = col)) %>% 
+  column_to_rownames("col") %>% 
+  HeatmapAnnotation(df = .,
+                       col = list(`Cell Type` = celltype_colors),
+                    show_legend = FALSE)
+```
+
+```{r}
+col_fun = colorRamp2(c(-3, 0, 3), c("blue", "white", "red"))
+
+binned_marker_hm = Heatmap(matrix = marker_counts,
+                           top_annotation = md,
+                            cluster_rows = T,
+                            cluster_columns = F,
+                            show_column_names = T,
+                           column_names_side = "top",
+                           column_names_gp = gpar(fontsize = 15),
+                            clustering_method_rows = "ward.D2",
+                           col = col_fun,
+                           column_names_rot = 45,
+                           heatmap_legend_param = list(title = "z-Normalized\nExpression", 
+                                                       direction = "horizontal",
+                                                       labels_gp = gpar(fontsize = 16),
+                                                       title_gp = gpar(fontsize = 16),
+                                                       at = -3:3,
+                                                       grid_width = unit(1.5, "cm")))
+
+draw(binned_marker_hm, heatmap_legend_side = "bottom")
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 13,
+          height = 14)
+draw(binned_marker_hm, heatmap_legend_side = "bottom")
+dev.off()
+```
+
+```{r}
+coi = c("Microglia, Homeostatic", "Microglia, DAM", 
+        "Microglia, Interferon-Responsive", 
+        "CD8+ T Cells")
+
+markers = c("Tmem119", "Cx3cr1", "P2ry12", "Slco2b1", "Mertk", "Csf1r",
+            "Lpl", "Spp1", "Itgax", "Cst7", "Csf1", 
+            "Ifi204", "Trim30a", "Ifit3", "Ifi27l2a", 
+            "Cdkn1a", "Cdkn2a", "Gdf15",
+            "Cd3e", "Cd8b1", "Laptm5", "Nkg7", "Tcf7", "Ctsw", "Sell",
+             "Tigit", "Cd53", "Il7r", "Xcl1",
+             "Gzmb", "Gzmk", "Ifng")
+
+marker_counts = AverageExpression(complete, 
+                                  features = markers, 
+                                  group.by = "typestate",
+                                  assay = "Xenium",
+                                  layer = "data") %>% 
+  .$Xenium %>% 
+  as.matrix() %>% 
+  .[, coi] %>% 
+  t() %>% 
+  scale() %>% 
+  t()
+
+#label just state
+# colnames(marker_counts) = gsub("Microglia, ", "", colnames(marker_counts))
+```
+
+```{r}
+col_fun = colorRamp2(c(-2, 0, 2), c("blue", "white", "red"))
+microglia_marker_hm = Heatmap(matrix = marker_counts,
+                            cluster_rows = T,
+                            cluster_columns = F,
+                            show_column_names = T,
+                           column_names_gp = gpar(fontsize = 24, fontface = "bold"),
+                           column_names_rot = 45,
+                           column_names_side = "top",
+                            clustering_method_rows = "ward.D2",
+                           row_names_gp = gpar(fontsize = 18),
+                           col = col_fun,  
+                           heatmap_legend_param = list(title = "z-Normalized\nExpression",
+                                    at = -2:2,
+                                    direction = "horizontal",
+                                    title_position = "topcenter",
+                                    title_gp = gpar(fontsize = 20, fontface = "bold"),
+                                    labels_gp = gpar(fontsize = 18),
+                                    grid_height = unit(0.5, "cm"), 
+                                    grid_width = unit(0.5, "cm")))
+
+draw(microglia_marker_hm, heatmap_legend_side = "bottom")
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 9,
+          height = 12)
+draw(microglia_marker_hm, heatmap_legend_side = "bottom")
+dev.off()
+```
+
+```{r}
+coi = c("CD8+ T Cells", "CD4+ T Cells")
+
+markers =  c("Cd3e", "Cd8b1", "Laptm5", "Nkg7", "Tcf7", "Ctsw", "Sell",
+             "Tigit", "Cd53", "Il7r", "Xcl1", "Cdkn1a", "Cdkn2a", "Gdf15", 
+             "Gzmb", "Gzmk", "Ifng")
+
+marker_counts = AverageExpression(complete, 
+                                  features = markers, 
+                                  group.by = "typestate",
+                                  assay = "Xenium",
+                                  layer = "data") %>% 
+  .$Xenium %>% 
+  as.matrix() %>% 
+  .[, coi] %>% 
+  t() %>% 
+  scale() %>% 
+  t()
+```
+
+```{r}
+col_fun = colorRamp2(c(-2, 0, 2), c("blue", "white", "red"))
+tcell_marker_hm = Heatmap(matrix = marker_counts,
+                            cluster_rows = T,
+                            cluster_columns = F,
+                            show_column_names = T,
+                           column_names_gp = gpar(fontsize = 24, fontface = "bold"),
+                           column_names_rot = 45,
+                           column_names_side = "top",
+                            clustering_method_rows = "ward.D2",
+                           row_names_gp = gpar(fontsize = 18),
+                           col = col_fun,  
+                           heatmap_legend_param = list(title = "z-Normalized\nExpression",
+                                    at = -2:2,
+                                    direction = "horizontal",
+                                    title_position = "topcenter",
+                                    title_gp = gpar(fontsize = 20, fontface = "bold"),
+                                    labels_gp = gpar(fontsize = 18),
+                                    grid_height = unit(0.5, "cm"), 
+                                    grid_width = unit(0.5, "cm")))
+
+draw(tcell_marker_hm, heatmap_legend_side = "bottom")
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 6,
+          height = 10)
+draw(tcell_marker_hm, heatmap_legend_side = "bottom")
+dev.off()
+```
+
+```{r}
+cell_md = complete@meta.data %>% 
+  dplyr::select(celltype, subtype, typestate) %>% 
+  unique()
+mouse_md = complete@meta.data %>% 
+  dplyr::select(mouse, age_group) %>% 
+  unique()
+
+abundances = complete@meta.data %>% 
+  dplyr::filter(parenchymal == "Parenchymal") %>% 
+  group_by(typestate, mouse, .drop = FALSE) %>% 
+  #first get total number of cells of each subtype
+  dplyr::count() %>% 
+  ungroup() %>% 
+  left_join(., cell_md) %>% 
+  left_join(., mouse_md) %>% 
+  #then get percent of total for each (useful only for cells without subtype)
+  group_by(mouse) %>% 
+  dplyr::mutate(total_cells = sum(n)) %>% 
+  ungroup() %>% 
+  group_by(mouse, typestate) %>% 
+  dplyr::mutate(pct_total = n / total_cells * 100) %>% 
+  ungroup() %>% 
+  #finally, percent of parent cell type (for cells with a parent cell type)
+  group_by(mouse, celltype) %>% 
+  dplyr::mutate(parent_cells = sum(n)) %>% 
+  ungroup() %>% 
+  group_by(mouse, typestate) %>% 
+  dplyr::mutate(pct_parent = n / parent_cells * 100) %>% 
+  ungroup() %>% 
+  #column for comparisons all at once
+  dplyr::mutate(pct = ifelse(is.na(subtype) | pct_parent == 100,
+                             yes = pct_total,
+                             no = pct_parent),
+                age_group = factor(age_group, levels = c("Young", "Old")))
+```
+
+```{r}
+ab_stats = abundances %>% 
+  group_by(typestate) %>% 
+  dplyr::summarize(pval = wilcox.test(pct_total ~ age_group)$p.value) %>% 
+  ungroup() %>% 
+  dplyr::mutate(padj = p.adjust(pval, method = "fdr"))
+```
+
+```{r}
+abundances_total = complete@meta.data %>% 
+  group_by(typestate, mouse, parenchymal, .drop = FALSE) %>% 
+  #first get total number of cells of each subtype
+  dplyr::count() %>% 
+  ungroup() %>% 
+  left_join(., cell_md) %>% 
+  left_join(., mouse_md) %>% 
+  #then get percent of total for each (useful only for cells without subtype)
+  group_by(mouse) %>% 
+  dplyr::mutate(total_cells = sum(n)) %>% 
+  ungroup() %>% 
+  group_by(mouse, typestate, parenchymal) %>% 
+  dplyr::mutate(pct_total = n / total_cells * 100) %>% 
+  ungroup() %>% 
+  #finally, percent of parent cell type (for cells with a parent cell type)
+  group_by(mouse, celltype, parenchymal) %>% 
+  dplyr::mutate(parent_cells = sum(n)) %>% 
+  ungroup() %>% 
+  dplyr::mutate(age_group = factor(age_group, levels = c("Young", "Old")))
+```   
+
+```{r}
+ab_stats_total = abundances_total %>% 
+  dplyr::filter(parenchymal == "Non-Parenchymal") %>% 
+  group_by(typestate) %>% 
+  dplyr::summarize(pval = t.test(pct_total ~ age_group)$p.value) %>% 
+  ungroup() %>% 
+  dplyr::mutate(padj = p.adjust(pval, method = "fdr"))
+```
+
+```{r}
+abundance_plot_microglia = abundances %>% 
+  dplyr::filter(typestate %in% c("Microglia, DAM", "Microglia, Interferon-Responsive")) %>% 
+  ggplot(aes(x = age_group, y = pct_parent, fill = age_group)) +
+  facet_wrap(~ typestate, scales = "free_y") +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, seed = 12345)) +
+  theme_bw() +
+  scale_fill_manual(values = age_pal) +
+  labs(x = "Age Group", y = "Percent of Total Microglia") +
+  theme(legend.position = "none")
+
+abundance_plot_cd8 = abundances_total %>% 
+  dplyr::filter(typestate %in% c("CD8+ T Cells")) %>% 
+  ggplot(aes(x = age_group, y = pct_total, fill = age_group)) +
+  facet_wrap(~ parenchymal, scales = "free_y") +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, seed = 12345)) +
+  theme_bw() +
+  scale_fill_manual(values = age_pal) +
+  labs(x = "Age Group", y = "Percent of Total Cells", title = "CD8+ T Cells") +
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5))
+
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 6,
+          height = 4)
+abundance_plot_microglia
+dev.off()
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 8,
+          height = 4)
+abundance_plot_cd8
+dev.off()
+
+abundance_plot_microglia
+abundance_plot_cd8
+```   
+
+```{r}
+celltype_pct_total = complete@meta.data %>% 
+  dplyr::filter(parenchymal == "Parenchymal") %>% 
+  group_by(celltype, mouse,.drop = FALSE) %>% 
+  #first get total number of cells of each celltype
+  dplyr::count() %>% 
+  ungroup() %>% 
+  left_join(., mouse_md) %>% 
+  #then get percent of total for each (useful only for cells without subtype)
+  group_by(mouse) %>% 
+  dplyr::mutate(total_cells = sum(n)) %>% 
+  ungroup() %>% 
+  group_by(mouse, celltype) %>% 
+  dplyr::mutate(pct_total = n / total_cells * 100) %>% 
+  ungroup() %>% 
+  dplyr::mutate(age_group = factor(age_group, levels = c("Young", "Old")))
+
+abundance_plot_total_mg = celltype_pct_total %>% 
+  dplyr::filter(celltype == "Microglia") %>% 
+  ggplot(aes(x = age_group, y = pct_total, fill = age_group)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, seed = 12345)) +
+  theme_bw() +
+  scale_fill_manual(values = age_pal) +
+  labs(x = "Age Group", y = "Percent of Total Cells", title = "Microglia") +
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5))
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 4,
+          height = 4)
+abundance_plot_total_mg
+dev.off()
+
+abundance_plot_total_mg
+```
+
+```{r}
+coi_plots = ImageDimPlot(complete, 
+                         group.by = c("typestate", "age_group", "parenchymal"), 
+                         fov = names(complete@images),
+                         dark.background = F,
+                         size = 1,
+                         crop = T, 
+                         #note: these get ignored downstream
+                         cols = c("Glutamatergic Neurons, Forebrain" = alpha(nejm_pal[1], 0.2),
+                                  "Glutamatergic Neurons, Hindbrain" =  alpha(nejm_pal[1], 0.2),
+                                  "Oligodendrocytes" = alpha(nejm_pal[2], 0.2),
+                                  "Microglia, DAM" = nejm_pal[3],
+                                  "Microglia, Interferon-Responsive" = nejm_pal[4],
+                                  "CD8+ T Cells" = nejm_pal[8]),
+                         combine = FALSE,
+                     flip_xy = FALSE)
+coi_plots = coi_plots[1:5] #duplication due to splitting, but not useful
+names(coi_plots) = names(complete@images)
+
+cell_conv = complete@meta.data %>% 
+  dplyr::select(celltype, typestate) %>% 
+  unique()
+
+coi_plots = lapply(coi_plots, function(p){
+  data = p$data %>% 
+    left_join(., cell_conv) %>% 
+    dplyr::mutate(display_name = factor(case_when(typestate %in% c("Microglia, DAM", 
+                                                                   "Microglia, Interferon-Responsive") ~
+                                                    typestate,
+                                                  .default = celltype))) %>% 
+    #move DAMs to top
+    dplyr::mutate(display_name = fct_relevel(display_name, c("CD8+ T Cells", 
+                                                             "Microglia, DAM",
+                                                             "Microglia, Interferon-Responsive"),
+                                             after = Inf)) %>% 
+    dplyr::arrange(display_name) 
+  
+  out = ggplot(data, aes(x = x, y = y, color = display_name)) +
+  ggrastr::rasterize(geom_point(size = 1), dpi = 300) +
+  scale_color_manual(name = "Cell Type",
+                     values = c("Glutamatergic Neurons" = alpha(nejm_pal[1], 0.01),
+                                 "Oligodendrocytes" = alpha(nejm_pal[2], 0.01),
+                                 "Microglia, DAM" = nejm_pal[3],
+                                  "Microglia, Interferon-Responsive" = nejm_pal[4],
+                                  "CD8+ T Cells" = nejm_pal[8]),
+                     na.value = alpha("gray", 0.01)) +
+    coord_fixed() +
+  theme_bw() +
+  labs(x = "", y = "", title = unique(data$age_group)) +
+    facet_wrap(~ parenchymal) +
+  theme(strip.text = element_text(size = 28),
+        axis.text.x = element_text(size = 18),
+        legend.text = element_text(size = 24),
+        legend.title =  element_text(size = 32),
+        axis.title.x = element_text(size = 32),
+        axis.text.y = element_text(size = 18),
+        axis.title.y = element_text(size = 32),
+        plot.title = element_text(size = 32, hjust = 0.5))
+  })
+```
+
+```{r}
+for(plot in names(coi_plots))
+{
+  cairo_pdf(paste0([REDACTED_FILE_PATH]
+             plot,
+             "_coi_distributions.pdf"),
+            width = 24,
+            height = 9)
+  plot(coi_plots[[plot]])
+  dev.off()
+}
+```
+
+```{r}
+pct_white = complete@meta.data %>% 
+  dplyr::filter(parenchymal == "Parenchymal") %>% 
+  group_by(mouse) %>% 
+  dplyr::summarize(pct_white_global = sum(tissue_type == "White Matter") / n() * 100) %>% 
+  ungroup()
+
+pct_white
+```   
+
+```{r}
+non_parenchymal_states = c("B Cells", "B Cells, Proliferating", "Corticotropes",
+                           "Endothelial Cells, Lymphatic", "Endothelial Cells, Peripheral",
+                           "Epithelial Cells, Choroid Plexus", "Fibroblasts", "Macrophages, Meningeal",
+                           "Neutrophils", "Neutrophils, Pro-Inflammatory", "Neutrophils, Proliferating",
+                           "Schwann Cells", "Skeletal Muscle", "Smooth Muscle Cells, Vascular",
+                           "Stromal Cells")
+
+wg_data = complete@meta.data %>% 
+  dplyr::filter(parenchymal == "Parenchymal" &
+                  !(typestate %in% non_parenchymal_states)) %>% 
+  dplyr::mutate(typestate = factor(as.character(typestate))) %>% #refactor
+  group_by(mouse, age_group, tissue_type, typestate, .drop = FALSE) %>% 
+  dplyr::count() %>% 
+  ungroup()
+
+wg_data_wilcox = wg_data %>% 
+  group_by(mouse, age_group, typestate) %>% 
+  dplyr::summarize(pct_white = subset(cur_data(), tissue_type == "White Matter")$n / sum(n) * 100,
+                   n_cells = sum(n)) %>% 
+  ungroup() %>% 
+  #remove 
+  #we will compare delta to give this a "paired" design (against mu = 0)
+  left_join(., pct_white) %>% 
+  dplyr::mutate(delta_white = pct_white - pct_white_global)
+
+wg_stats_wilcox = wg_data_wilcox %>% 
+  group_by(typestate) %>% 
+  dplyr::summarize(avg_pct_white = mean(pct_white),
+                   sd_pct_white = sd(pct_white),
+                   avg_delta = mean(delta_white),
+                   sd_delta = sd(delta_white),
+                   pval = t.test(delta_white, mu = 0)$p.value) %>% 
+  ungroup() %>% 
+  dplyr::mutate(padj = p.adjust(pval, method = "fdr")) %>% 
+  dplyr::arrange(padj)
+
+wg_stats_wilcox
+```
+
+```{r}
+wg_data_old = complete@meta.data %>% 
+  dplyr::filter(parenchymal == "Parenchymal" &
+                  !(typestate %in% non_parenchymal_states) &
+                  age_group == "Old") %>% 
+  dplyr::mutate(typestate = factor(as.character(typestate)),
+                mouse = factor(as.character(mouse))) %>% #refactor
+  group_by(mouse, tissue_type, typestate, .drop = FALSE) %>% 
+  dplyr::count() %>% 
+  ungroup()
+
+wg_data_old_wilcox = wg_data_old %>% 
+  group_by(mouse, typestate) %>% 
+  dplyr::summarize(n_white = subset(cur_data(), tissue_type == "White Matter")$n,
+                   n_cells = sum(n),
+                   pct_white = n_white / n_cells * 100,
+                   ) %>% 
+  ungroup() %>% 
+  left_join(., pct_white) %>% 
+  dplyr::mutate(delta_white = pct_white - pct_white_global)
+
+wg_stats_old_wilcox = wg_data_old_wilcox %>% 
+  group_by(typestate) %>% 
+  dplyr::summarize(avg_pct_white = mean(pct_white),
+                   sd_pct_white = sd(pct_white),
+                   avg_delta = mean(delta_white),
+                   sd_delta = sd(delta_white),
+                   pval = t.test(delta_white, mu = 0)$p.value) %>% 
+  ungroup() %>% 
+  dplyr::mutate(padj = p.adjust(pval, method = "fdr")) %>% 
+  dplyr::arrange(padj)
+
+wg_stats_old_wilcox
+```
+
+```{r}
+pct_white_complete = complete@meta.data %>% 
+  dplyr::filter(parenchymal == "Parenchymal") %>% 
+  dplyr::summarize(pct_white_global = sum(tissue_type == "White Matter") / n() * 100) %>% 
+  .$pct_white_global
+
+wg_data_ct = complete@meta.data %>% 
+  dplyr::filter(parenchymal == "Parenchymal" &
+                  !(typestate %in% non_parenchymal_states)) %>% 
+  dplyr::mutate(typestate = factor(as.character(typestate)),
+                mouse = factor(as.character(mouse))) %>% #refactor
+  group_by(tissue_type, typestate, .drop = FALSE) %>% 
+  dplyr::count() %>% 
+  ungroup()
+
+wg_data_ct_wilcox = wg_data_ct %>% 
+  group_by(typestate) %>% 
+  dplyr::summarize(n_white = subset(cur_data(), tissue_type == "White Matter")$n,
+                   n_cells = sum(n),
+                   pct_white = n_white / n_cells * 100,
+                   ) %>% 
+  ungroup() %>% 
+  dplyr::mutate(pct_white_global = pct_white_complete) %>% 
+  dplyr::mutate(delta_white = pct_white - pct_white_global,
+                expect_white = n_cells * pct_white_global / 100,
+                log2_fold_enrichment_white = log2(n_white / expect_white))
+```
+
+```{r}
+wm_enrichment_plot = wg_data_ct_wilcox %>% 
+  dplyr::mutate(direction = factor(ifelse(log2_fold_enrichment_white > 0,
+                                   "up",
+                                   "down"))) %>% 
+  ggplot(aes(x = log2_fold_enrichment_white, 
+                                y = reorder(typestate, log2_fold_enrichment_white),
+                                fill = direction)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  scale_fill_manual(values = c("up" = "dodgerblue4", "down" = "firebrick4")) +
+  labs(x = "log2 Fold-Enrichment in White Matter", y = "Cell Type / State") +
+  theme(legend.position = "none")
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 8,
+          height = 7)
+wm_enrichment_plot
+dev.off()
+
+wm_enrichment_plot
+```   
+
+```{r}
+wm_enrichment_plot_main = wg_data_ct_wilcox %>% 
+  dplyr::filter(grepl("T Cells|Microglia|NK Cells", typestate) & !grepl("High", typestate)) %>% 
+  dplyr::mutate(direction = factor(ifelse(log2_fold_enrichment_white > 0,
+                                   "up",
+                                   "down"))) %>% 
+  ggplot(aes(x = log2_fold_enrichment_white, 
+                                y = reorder(typestate, log2_fold_enrichment_white),
+                                fill = direction)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  scale_fill_manual(values = c("up" = "dodgerblue4", "down" = "firebrick4")) +
+  labs(x = "log2 Fold-Enrichment in White Matter", y = "Cell Type / State") +
+  theme(legend.position = "none")
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 8,
+          height = 7)
+wm_enrichment_plot_main
+dev.off()
+
+wm_enrichment_plot_main
+```   
+
+```{r}
+wg_stats_individual = complete@meta.data %>% 
+  dplyr::filter(parenchymal == "Parenchymal" &
+                  !(typestate %in% non_parenchymal_states)) %>% 
+  group_by(mouse) %>% 
+  dplyr::mutate(n_cells_total = n(),
+                total_white = sum(tissue_type == "White Matter") + 1, #avoid Inf
+                prop_white_total = total_white / n_cells_total) %>% 
+  ungroup() %>% 
+  group_by(mouse, typestate, n_cells_total, total_white, prop_white_total) %>% 
+  dplyr::summarize(n_typestate = n(),
+                   n_white_typestate = sum(tissue_type == "White Matter") + 1, #avoid Inf
+                   pct_white_typestate = n_white_typestate / n_typestate * 100,
+                   expect_white = n_typestate * prop_white_total,
+                   delta_white = pct_white_typestate - (prop_white_total * 100),
+                   log2_fold_enrichment_white = log2(n_white_typestate / expect_white)) %>% 
+  ungroup() %>% 
+  unique()
+
+hist(wg_stats_individual$log2_fold_enrichment_white, breaks = 50) #actually fairly normal
+```
+
+```{r}
+wm_enrichment_plot = wg_stats_individual %>% 
+  #need means ahead of time for sorting
+  group_by(typestate) %>% 
+  dplyr::mutate(mean_lfc = mean(log2_fold_enrichment_white)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = log2_fold_enrichment_white, 
+             y = reorder(typestate, mean_lfc))) +
+  stat_summary(geom = "bar", fun = "mean", fill = "dodgerblue4") +
+  stat_summary(fun.data = "mean_se",
+                geom = "errorbar",
+                width = 0.3) +
+  theme_bw() +
+  labs(x = "log2(Fold-Enrichment)\nin White ± SEM", y = "") +
+  theme(legend.position = "none")
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 8,
+          height = 7)
+wm_enrichment_plot
+dev.off()
+
+wm_enrichment_plot
+```   
+
+```{r}
+wm_enrichment_plot_main = wg_stats_individual %>% 
+  dplyr::filter(grepl("T Cells|Microglia, H|Microglia, DAM$", typestate) & !grepl("High", typestate)) %>% 
+  #need means ahead of time for sorting
+  group_by(typestate) %>% 
+  dplyr::mutate(mean_lfc = mean(log2_fold_enrichment_white)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = log2_fold_enrichment_white, 
+             y = reorder(typestate, mean_lfc))) +
+  stat_summary(geom = "bar", fun = "mean", fill = "dodgerblue4") +
+  stat_summary(fun.data = "mean_se",
+                geom = "errorbar",
+                width = 0.3) +
+  theme_bw() +
+  labs(x = "log2(Fold-Enrichment)\nin White ± SEM", y = "") +
+  theme(legend.position = "none")
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 8,
+          height = 7)
+wm_enrichment_plot_main
+dev.off()
+
+wm_enrichment_plot_main
+```
+
+```{r}
+wg_data_wilcox_coi = wg_data_wilcox %>%  
+  dplyr::filter(typestate %in% c("Microglia, Homeostatic", "Microglia, DAM", "Microglia, Interferon-Responsive",
+                                 "CD8+ T Cells")) %>% 
+  dplyr::mutate(age_group = factor(age_group, levels = c("Young", "Old")),
+                typestate = factor(typestate, levels = c("Microglia, Homeostatic", "Microglia, DAM", 
+                                                         "Microglia, Interferon-Responsive", "CD8+ T Cells")),
+                combined = factor(paste(typestate, age_group)))
+wg_coi_stats = pairwise.t.test(x = wg_data_wilcox_coi$pct_white, 
+                               g = wg_data_wilcox_coi$combined, 
+                               p.adjust.method = "fdr") %>% 
+  tidy() %>% 
+  dplyr::filter(p.value < 0.05) #nothing
+
+coi_wm_plot =  ggplot(wg_data_wilcox_coi, aes(x = typestate, y = pct_white, fill = age_group)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2)) +
+  theme_bw() +
+  scale_fill_manual(values = age_pal, name = "Age Group") +
+  labs(y = "Percent of Cells in White Matter", x = "") +
+   theme(axis.text.y = element_text(size = 12),
+        axis.text.x = element_text(size = 12, angle = 45, hjust = 1),
+        axis.title.y =  element_text(size = 14))
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 8,
+          height = 5)
+coi_wm_plot 
+dev.off()
+
+coi_wm_plot 
+```   
+
+```{r}
+senmayo_genes = read_excel([REDACTED_FILE_PATH]
+                           sheet = "mouse") %>% 
+  .$`Gene(murine)`
+
+complete = AddModuleScore(complete, features = list("SenMayo" = senmayo_genes), name = "SenMayo", nbin = 10, ctrl = 21, assay = "Xenium")
+
+#determine overlap   
+intersect(senmayo_genes, rownames(complete)) #just 17; take with huge grain of salt
+```   
+
+```{r}
+mg_senmayo_sum = complete@meta.data %>% 
+  dplyr::filter(celltype == "Microglia") %>% 
+  dplyr::mutate(cell_state = factor(gsub("Microglia, ", "", typestate))) %>% 
+  group_by(mouse, cell_state) %>% 
+  dplyr::summarize(senmayo_mean = mean(SenMayo1, na.rm = T),
+                   senmayo_median = median(SenMayo1, na.rm = T)) %>% 
+  ungroup()
+
+mg_senmayo_comps = pairwise.t.test(x = mg_senmayo_sum$senmayo_median, 
+                                   g = mg_senmayo_sum$cell_state,
+                                   p.adjust.method = "fdr") %>% 
+  tidy() %>% 
+  dplyr::filter(p.value < 0.05) %>% 
+  dplyr::mutate(annot = format(p.value, digits = 2, scientific = T),
+                yval = seq(from = max(mg_senmayo_sum$senmayo_median) * 1.1, by = max(mg_senmayo_sum$senmayo_median) * 0.1, length.out = n()))
+
+mg_senmayo_plot = ggplot(mg_senmayo_sum, aes(x = cell_state, y = senmayo_median, fill = cell_state)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point() +
+  geom_signif(inherit.aes = F,
+            data = mg_senmayo_comps,
+            aes(xmin = group1, xmax = group2, annotations = annot, y_position = yval),
+            tip_length = 0,
+            manual=TRUE) +
+  theme_bw() +
+  scale_fill_npg() +
+  labs(x = "Microglia Cell State", y = "Median SenMayo Enrichment") +
+  theme(legend.position = "none")
+
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 9,
+    height = 7, 
+    family = "Arial")
+mg_senmayo_plot
+dev.off()
+
+mg_senmayo_plot
+```   
+
+```{r}
+interaction_res = read.csv([REDACTED_FILE_PATH]
+interaction_res_parenchymal = read.csv([REDACTED_FILE_PATH]
+```
+
+```{r}
+cor_mat = interaction_res %>% 
+  dplyr::select(cell_i, cell_j, effect_size) %>% 
+  dplyr::mutate(effect_size = log2(effect_size)) %>% #log2!
+  pivot_wider(names_from = cell_j, values_from = effect_size) %>% 
+  column_to_rownames("cell_i") %>% 
+  as.matrix()
+
+sig_mat = interaction_res %>% 
+  dplyr::select(cell_i, cell_j, padj) %>% 
+  pivot_wider(names_from = cell_j, values_from = padj) %>% 
+  column_to_rownames("cell_i") %>% 
+  as.matrix()
+
+correlogram = Heatmap(matrix = cor_mat,
+                        cluster_rows = T,
+                        cluster_columns = T,
+                        show_column_names = T,
+                        show_row_names = T,
+                        #column_names_side = "top",
+                        #column_names_gp = gpar(fontsize = 15),
+                        clustering_method_rows = "ward.D2",
+                      col = colorRamp2(c(-6, 0, 6), c("blue", "white", "red")),
+                        clustering_method_columns = "ward.D2",
+                        column_names_rot = 45,
+                        cell_fun = function(j, i, x, y, w, h, fill){
+                          if(sig_mat[i, j] > 0.05) 
+                            {
+                              grid.text("X", x, y)
+                            } 
+                          },
+                      row_names_gp = gpar(fontsize = 10),
+                      column_names_gp = gpar(fontsize = 10),
+                        heatmap_legend_param = list(title = "Log2[Interaction Effect Size]", 
+                                                    at = c(-6, -4, -2, 0, 2, 4, 6),
+                                                       direction = "horizontal",
+                                                    title_gp = gpar(fontsize = 16, fontface = "bold"),
+                                                    labels_gp = gpar(fontsize = 12),
+                                                    grid_height = unit(0.5, "cm"), 
+                                                    grid_width = unit(0.5, "cm")))
+
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 12,
+          height = 12)
+draw(correlogram , heatmap_legend_side = "bottom")
+dev.off()
+
+draw(correlogram , heatmap_legend_side = "bottom")
+```   
+
+```{r}
+cor_mat = interaction_res_parenchymal %>% 
+  dplyr::select(cell_i, cell_j, effect_size) %>% 
+  dplyr::filter(!(cell_i %in% non_parenchymal_states) & !(cell_j %in% non_parenchymal_states)) %>% 
+  dplyr::mutate(effect_size = log2(effect_size)) %>% #log2!
+  pivot_wider(names_from = cell_j, values_from = effect_size) %>% 
+  column_to_rownames("cell_i") %>% 
+  as.matrix()
+
+sig_mat = interaction_res_parenchymal %>% 
+  dplyr::select(cell_i, cell_j, padj) %>% 
+  dplyr::filter(!(cell_i %in% non_parenchymal_states) & !(cell_j %in% non_parenchymal_states)) %>% 
+  pivot_wider(names_from = cell_j, values_from = padj) %>% 
+  column_to_rownames("cell_i") %>% 
+  as.matrix()
+
+correlogram = Heatmap(matrix = cor_mat,
+                        cluster_rows = T,
+                        cluster_columns = T,
+                        show_column_names = T,
+                        show_row_names = T,
+                      col = colorRamp2(c(-6, 0, 6), c("blue", "white", "red")),
+                        #column_names_side = "top",
+                        #column_names_gp = gpar(fontsize = 15),
+                        clustering_method_rows = "ward.D2",
+                        clustering_method_columns = "ward.D2",
+                        column_names_rot = 45,
+                        cell_fun = function(j, i, x, y, w, h, fill){
+                          if(sig_mat[i, j] > 0.05) 
+                            {
+                              grid.text("X", x, y)
+                            } 
+                          },
+                      row_names_gp = gpar(fontsize = 24),
+                      column_names_gp = gpar(fontsize = 24),
+                        heatmap_legend_param = list(title = "Log2[Interaction Effect Size]", 
+                                                    at = c(-6, -4, -2, 0, 2, 4, 6),
+                                                       direction = "horizontal",
+                                                    title_gp = gpar(fontsize = 30, fontface = "bold"),
+                                                    labels_gp = gpar(fontsize = 24),
+                                                    grid_height = unit(0.5, "cm"), 
+                                                    grid_width = unit(0.5, "cm")))
+
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 12,
+          height = 12)
+draw(correlogram , heatmap_legend_side = "bottom")
+dev.off()
+
+draw(correlogram , heatmap_legend_side = "bottom")
+```  
+
+```{r}
+cor_mat_mini = interaction_res_parenchymal %>% 
+  dplyr::filter(cell_i %in% c("Microglia, DAM", "Microglia, Interferon-Responsive",  "CD8+ T Cells", "CD4+ T Cells") &
+                  cell_j %in% c("Microglia, DAM", "Microglia, Interferon-Responsive",  "CD8+ T Cells", "CD4+ T Cells")) %>% 
+  dplyr::select(cell_i, cell_j, effect_size) %>% 
+  dplyr::mutate(effect_size = log2(effect_size)) %>% #log2!
+  pivot_wider(names_from = cell_j, values_from = effect_size) %>% 
+  column_to_rownames("cell_i") %>% 
+  as.matrix() 
+
+sig_mat_mini = interaction_res_parenchymal %>% 
+  dplyr::filter(cell_i %in% c("Microglia, DAM", "Microglia, Interferon-Responsive",  "CD8+ T Cells", "CD4+ T Cells") &
+                  cell_j %in% c("Microglia, DAM", "Microglia, Interferon-Responsive",  "CD8+ T Cells", "CD4+ T Cells")) %>% 
+  dplyr::select(cell_i, cell_j, padj) %>% 
+  pivot_wider(names_from = cell_j, values_from = padj) %>% 
+  column_to_rownames("cell_i") %>% 
+  as.matrix()
+
+correlogram_mini = Heatmap(matrix = cor_mat_mini,
+                        cluster_rows = F,
+                        cluster_columns = F,
+                        show_column_names = T,
+                        show_row_names = T,
+                        col = colorRamp2(c(-2, 0, 6), c("blue", "white", "red")),
+                        #column_names_side = "top",
+                        #column_names_gp = gpar(fontsize = 15),
+                        clustering_method_rows = "ward.D2",
+                        clustering_method_columns = "ward.D2",
+                        column_names_rot = 45,
+                        cell_fun = function(j, i, x, y, w, h, fill){
+                          if(sig_mat_mini[i, j] > 0.05) 
+                            {
+                              grid.text("X", x, y)
+                            } 
+                          },
+                        row_names_gp = gpar(fontsize = 24),
+                      column_names_gp = gpar(fontsize = 24),
+                        heatmap_legend_param = list(title = "Log2[Interaction Effect Size]", 
+                                                    at = c(-2, 0, 2, 4, 6),
+                                                       direction = "horizontal",
+                                                    title_gp = gpar(fontsize = 30, fontface = "bold"),
+                                                    labels_gp = gpar(fontsize = 24),
+                                                    grid_height = unit(0.5, "cm"), 
+                                                    grid_width = unit(0.5, "cm")))
+
+cairo_pdf([REDACTED_FILE_PATH]
+          width = 6,
+          height = 6)
+draw(correlogram_mini , heatmap_legend_side = "bottom")
+dev.off()
+
+draw(correlogram_mini , heatmap_legend_side = "bottom")
+```
+
+```{r eval=FALSE}
+for(s in unique(complete@meta.data$sample))
+{
+    out = complete@meta.data %>% 
+      dplyr::filter(sample == s)
+    xenium_id = out$sample[1]
+    out = out %>% 
+      dplyr::mutate(cell_id = substring(rownames(.), regexpr("[a-z]{8}-1", rownames(.))),
+                    group = typestate) %>% 
+      dplyr::select(cell_id, group)
+    write_csv(out, paste0([REDACTED_FILE_PATH] xenium_id, "_cells.csv"))
+}
+```   
+
+```{r}
+coi_plot_mouse_old = coi_plots[["Rogan_output.XETG00190__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__193909"]] +
+  guides(colour = guide_legend(override.aes = list(size=10, alpha = 1))) 
+coi_plot_mouse_young = coi_plots[["Rogan_output.XETG00191__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__181046"]] +
+  guides(colour = guide_legend(override.aes = list(size=10, alpha = 1))) 
+mouse_distro_patchwork = (coi_plot_mouse_young / coi_plot_mouse_old) + 
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom",
+        plot.tag = element_text(size = 40, face = "bold"),
+        strip.text = element_text(size = 28),
+        axis.text.x = element_text(size = 24),
+        legend.text = element_text(size = 24),
+        legend.title =  element_text(size = 32),
+        axis.title.x = element_text(size = 32),
+        axis.text.y = element_text(size = 24),
+        axis.title.y = element_text(size = 32),
+        plot.title = element_text(size = 32, hjust = 0.5)) 
+mouse_spatcor_mini = wrap_elements(
+  grid.grabExpr(
+    draw(correlogram_mini, 
+           annotation_legend_side = "bottom", 
+           heatmap_legend_side = "bottom",
+           merge_legend = TRUE)))
+
+human_umap = readRDS([REDACTED_FILE_PATH]
+human_wm_enrichment_main = readRDS([REDACTED_FILE_PATH]
+human_dam_boxplots = readRDS([REDACTED_FILE_PATH]
+human_cd8_boxplots = readRDS([REDACTED_FILE_PATH]
+dam_distro_names = c(ad_distro_plot = "output.XETG00190__[REDACTED_IDENTIFIER]__Misharin_hBrain_4__[REDACTED_IDENTIFIER]__182418",
+                     nc_distro_plot = "output.XETG00190__[REDACTED_IDENTIFIER]__Misharin_hBrain_2__[REDACTED_IDENTIFIER]__182418",
+                     young_distro_plot = "output.XETG00190__[REDACTED_IDENTIFIER]__Misharin_hBrain_1__[REDACTED_IDENTIFIER]__182418",
+                     late_distro_plot = "output.XETG00191__[REDACTED_IDENTIFIER]__Misharin_hBrain_4__[REDACTED_IDENTIFIER]__174621",
+                     sa_distro_plot = "output.XETG00191__[REDACTED_IDENTIFIER]__Misharin_hBrain_1__[REDACTED_IDENTIFIER]__174621")
+human_distro_plots = lapply(dam_distro_names, function(plt){
+  out = readRDS(paste0([REDACTED_FILE_PATH]
+             plt,
+             "_DAM_distributions.rds"))
+  out = out +
+  scale_color_manual(name = "Cell Type",
+                   values = c("Glutamatergic Neurons" = alpha(nejm_pal[1], 0.025),
+                               "Oligodendrocytes" = alpha(nejm_pal[2], 0.025),
+                               "Microglia, DAM" = nejm_pal[3],
+                              "CD8+ T Cells" = nejm_pal[8]),
+                   na.value = alpha("gray", 0.1))
+  return(out) })
+human_distro_patchwork = ((human_distro_plots[["young_distro_plot"]] +
+                             guides(colour = guide_legend(override.aes = list(size=10, alpha = 1)))) |
+                            (human_distro_plots[["sa_distro_plot"]] +
+                             guides(colour = guide_legend(override.aes = list(size=10, alpha = 1)))) |
+                            (human_distro_plots[["nc_distro_plot"]] +
+                               guides(colour = guide_legend(override.aes = list(size=10, alpha = 1)))) |
+                            (human_distro_plots[["ad_distro_plot"]] +
+                               guides(colour = guide_legend(override.aes = list(size=10, alpha = 1)))) |
+                            (human_distro_plots[["late_distro_plot"]] +
+                               guides(colour = guide_legend(override.aes = list(size=10, alpha = 1))))) + 
+  plot_layout(guides = "collect")  &
+  theme(legend.position = "bottom",
+        plot.tag = element_text(size = 40, face = "bold"),
+        strip.text = element_text(size = 28),
+        axis.text.x = element_text(size = 24),
+        legend.text = element_text(size = 24),
+        legend.title =  element_text(size = 32),
+        axis.title.x = element_text(size = 32),
+        axis.text.y = element_text(size = 24),
+        axis.title.y = element_text(size = 32),
+        plot.title = element_text(size = 32, hjust = 0.5)) 
+human_spatcor_mini = readRDS([REDACTED_FILE_PATH]
+
+layout = "AAAABBD
+AAAACCD
+EEEEEEE
+EEEEEEE
+EEEEEEE
+EEEEEEE
+FFFFGGI
+FFFFHHI
+JJJJJJJ
+JJJJJJJ
+JJJJJJJ
+KKKLL##
+KKKLL##"
+fig2 = free(umap, side = "lr") +
+  abundance_plot_microglia +
+  abundance_plot_cd8 + 
+  (wm_enrichment_plot_main + labs(x = "log2(Fold-Enrichment)\nin White Matter ± SEM", y = "")) + 
+  free(wrap_elements(mouse_distro_patchwork), side = "lrtb") +
+  free(human_umap, type = "label") +
+  human_dam_boxplots +
+  human_cd8_boxplots +
+  free((human_wm_enrichment_main + labs(x = "log2(Fold-Enrichment)\nin White Matter ± SEM", y = "")),
+       side = "tb") +
+  free(wrap_elements(human_distro_patchwork), side = "lrtb") +
+  mouse_spatcor_mini +
+  human_spatcor_mini +
+  plot_layout(design = layout, guides = "auto") + 
+  plot_annotation(tag_levels = 'a') & 
+  theme(plot.tag = element_text(size = 40, face = "bold"),
+        strip.text = element_text(size = 28),
+        axis.text.x = element_text(size = 24),
+        legend.text = element_text(size = 24),
+        legend.title =  element_text(size = 32),
+        axis.title.x = element_text(size = 32),
+        axis.text.y = element_text(size = 24),
+        axis.title.y = element_text(size = 32),
+        plot.title = element_text(size = 32, hjust = 0.5))
+
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 50,
+    height = 100, 
+    family = "Arial")
+fig2
+dev.off()
+```   
+
+```{r}
+dam_image = wrap_elements(png::readPNG([REDACTED_FILE_PATH] Images/33973_DAM_cluster_1_edited.png",
+                         native = TRUE))
+irm_image = wrap_elements(png::readPNG([REDACTED_FILE_PATH] Images/6771_IRM_singlet_1_edited.png",
+                         native = TRUE))
+cd8_image = wrap_elements(png::readPNG([REDACTED_FILE_PATH] Images/6771_CD8_cluster_1_onlyT_edited.png",
+                         native = TRUE))
+mouse_spatcor_full = wrap_elements(
+  grid.grabExpr(
+    draw(correlogram, 
+           annotation_legend_side = "bottom", 
+           heatmap_legend_side = "bottom",
+           merge_legend = TRUE)))
+
+complete_wm_enrichment_human = readRDS([REDACTED_FILE_PATH]
+human_microglia_marker_hm = readRDS([REDACTED_FILE_PATH]
+human_dam_image = wrap_elements(png::readPNG([REDACTED_FILE_PATH]
+                         native = TRUE))
+human_cd8_image = wrap_elements(png::readPNG([REDACTED_FILE_PATH]
+                         native = TRUE))
+human_spatcor_full = readRDS([REDACTED_FILE_PATH]
+
+mg_marker_hm_fig = wrap_elements(
+  grid.grabExpr(
+    draw(microglia_marker_hm, 
+           annotation_legend_side = "bottom", 
+           heatmap_legend_side = "bottom",
+           merge_legend = TRUE)))
+# tcell_marker_hm_fig = wrap_elements(
+#   grid.grabExpr(
+#     draw(tcell_marker_hm, 
+#            annotation_legend_side = "bottom", 
+#            heatmap_legend_side = "bottom",
+#            merge_legend = TRUE)))
+
+layout = "AABCC
+DDDDE
+FFFFG
+HH#II"
+figS2 = mg_marker_hm_fig +
+  wm_enrichment_plot +
+  dam_image +
+  (irm_image +
+  cd8_image) +
+  free(human_microglia_marker_hm) +
+  (human_dam_image +
+  human_cd8_image) +
+  (complete_wm_enrichment_human + labs(x = "log2(Fold-Enrichment)\nin White Matter ± SEM", y = "")) +
+  mouse_spatcor_full +
+  human_spatcor_full +
+  plot_layout(design = layout) + 
+  plot_annotation(tag_levels = 'a') & 
+  theme(plot.tag = element_text(size = 40, face = "bold"),
+        strip.text = element_text(size = 28),
+        axis.text.x = element_text(size = 24),
+        legend.text = element_text(size = 24),
+        legend.title =  element_text(size = 32),
+        axis.title.x = element_text(size = 32),
+        axis.text.y = element_text(size = 24),
+        axis.title.y = element_text(size = 32),
+        plot.title = element_text(size = 32, hjust = 0.5))
+
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 75,
+    height = 75, 
+    family = "Arial")
+figS2
+dev.off()
+```   
+
+```{r eval=FALSE}
+human = readRDS([REDACTED_FILE_PATH]
+human_panel = data.frame(Gene = rownames(human))
+```
+
+```{r eval=FALSE}
+mouse_panel = data.frame(Gene = rownames(complete))
+out = list("Mouse Spatial Marker Genes" = complete@misc$markers,
+           "Human Spatial Marker Genes" = human@misc$markers,
+           "Mouse Xenium Panel" = mouse_panel,
+           "Human Xenium Panel" = human_panel)
+
+openxlsx::write.xlsx(out, [REDACTED_FILE_PATH]
+```   
+
+```{r eval=FALSE}
+cleaned = complete
+remove_cols = c("orig.ident", "mouse", "segmentation_method", "SCT_snn_res.0.8", "notes", "SenMayo1")
+for(col in remove_cols){
+  cleaned[[col]] = NULL
+}
+clean_names = gsub("Rogan_output-|_Misharin_mBrain_|_\\d{8}__\\d{6}", "", colnames(cleaned))
+clean_names = gsub("__", "_", clean_names)
+cleaned = RenameCells(cleaned, new.names = clean_names)
+
+cellbrowser_export_seurat5(obj = cleaned,
+                           fov = "combined", 
+                           assay = "Xenium",
+                           dataset_name = "Mouse Aging Brain Spatial",
+                           short_name = "mouse_aging_brain_spatial", 
+                           cluster_col = "typestate", 
+                           outdir = [REDACTED_FILE_PATH] 
+                           compress_directory = TRUE,
+                           delete_files = TRUE)
+saveRDS(cleaned, [REDACTED_FILE_PATH]
+```
+
+```{bash eval=FALSE}
+#need deploy user for cbBuild
+ssh [REDACTED_EMAIL_URL]
+screen
+
+#transfer object over from Quest and unpack
+mkdir [REDACTED_FILE_PATH]
+scp [REDACTED_EMAIL_URL]:[REDACTED_FILE_PATH] \
+[REDACTED_FILE_PATH]
+
+cd [REDACTED_FILE_PATH]
+tar -xzf mouse_aging_brain_spatial.tar.gz
+
+#annotate marker genes
+cbMarkerAnnotate markers.tsv markers_annotated.csv
+rm markers.tsv
+mv markers_annotated.csv markers.tsv
+
+cbBuild --init
+
+#move unpacked folder into production
+cbBuild -i cellbrowser.conf -o [REDACTED_FILE_PATH]
+
+#clean up
+rm -r [REDACTED_FILE_PATH]
+
+#remember to update [REDACTED_FILE_PATH]
+```   
+
+```{r eval=FALSE}
+raw_dirs = list.dirs([REDACTED_FILE_PATH]
+                              recursive = FALSE)
+raw_dirs = raw_dirs[grepl("Rogan_output-X", raw_dirs)]
+tmp = basename(raw_dirs)
+raw_dirs = paste0(raw_dirs, "/outs")
+names(raw_dirs) = tmp
+
+for(i in 1:length(raw_dirs)){
+  dir = raw_dirs[i]
+  #simplify file structure
+  file.copy(from = dir, 
+            to = [REDACTED_FILE_PATH] 
+            recursive = TRUE)
+  file.rename(from = [REDACTED_FILE_PATH]
+              to = paste0([REDACTED_FILE_PATH] names(dir)))
+  #we want everything in the main folder, only baysor segmentation from baysor folder
+  baysor_segmentation = paste0(dir, 
+                               "/Baysor_legacy_0pt5/segmentation_polygons_2d.json")
+  baysor_newpath = paste0([REDACTED_FILE_PATH]
+                          names(dir),
+                          "/Baysor_segmentation_polygons_2d.json")
+  file.copy(from = baysor_segmentation,
+            to = baysor_newpath)
+  #remove baysor dir (not necessary to re-render)
+  unlink(paste0([REDACTED_FILE_PATH]
+                          names(dir),
+                     "/Baysor_legacy_0pt5"),
+              recursive = TRUE)
+  unlink(paste0([REDACTED_FILE_PATH]
+                          names(dir),
+                     "/Baysor"),
+              recursive = TRUE)
+  #finally, compress the directory
+  tar(tarfile = paste0([REDACTED_FILE_PATH]
+                       names(dir),
+                       ".tar.gz"), 
+      files = paste0([REDACTED_FILE_PATH]
+                       names(dir)), 
+      compression = 'gzip', 
+      tar="tar")
+  unlink(paste0([REDACTED_FILE_PATH]
+                          names(dir)),
+              recursive = TRUE)
+}
+```   
+
+```{r eval=FALSE}
+tmp = complete@meta.data %>% 
+  dplyr::select(sample, age_months, age_group, sex) %>% 
+  unique() %>% 
+  remove_rownames()
+
+geo_md = data.frame(path = list.files([REDACTED_FILE_PATH]
+                                      pattern = "tar\\.gz|\\.rds",
+                                      full.names = TRUE)) %>% 
+  dplyr::mutate(file = basename(path),
+                sample = gsub("\\.tar\\.gz", "", file), 
+                md5sum = tools::md5sum(path)) %>% 
+  left_join(., tmp) %>% 
+  dplyr::mutate(sample = gsub("Rogan_output-|_Misharin_mBrain_|_\\d{8}__\\d{6}", "", sample),
+                sample = gsub("__", "_", sample),
+                sample = gsub("_$", "", sample)) %>% 
+  group_by(age_group) %>% 
+  dplyr::mutate(title = paste(age_group, "mouse", seq(from = 1, to = n()), sep = "_")) %>% 
+  ungroup()
+
+write_csv(geo_md, [REDACTED_FILE_PATH]
+```

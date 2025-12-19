@@ -1,0 +1,490 @@
+```{r}
+library(tximport)
+library(tximeta)
+library(DESeq2)
+library(tidyverse)
+library(parallel)
+library(doParallel)
+library(BiocParallel)
+library(pheatmap)
+library(readxl)
+library(uwot)
+library(factoextra)
+library(biomaRt)
+library(ggsci)
+library(Cairo)
+library(patchwork)
+library(ggsignif)
+library(fgsea)
+library(biomaRt)
+
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+source([REDACTED_FILE_PATH]
+
+registerDoParallel(makeCluster(12))
+register(MulticoreParam(12))
+```
+
+```{r}
+depletion_mods = readRDS([REDACTED_FILE_PATH] +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 16),
+        axis.text.y = element_text(size = 12),
+        axis.title.y = element_text(size = 18),
+        plot.margin = margin(t = 5.5, r = 5.5, b = 5.5, l = 25, unit = "pt"))
+depletion_aging_boxplots = readRDS([REDACTED_FILE_PATH] +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 16),
+        axis.text.y = element_text(size = 12),
+        strip.text.x = element_text(size = 24),
+        axis.title.y = element_text(size = 18),
+        plot.margin = margin(t = 5.5, r = 5.5, b = 5.5, l = 25, unit = "pt"))
+
+mertk_mods = readRDS([REDACTED_FILE_PATH] +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 16),
+        axis.text.y = element_text(size = 12),
+        axis.title.y = element_text(size = 18),
+        plot.margin = margin(t = 5.5, r = 5.5, b = 5.5, l = 25, unit = "pt"))
+mertk_aging_boxplots = readRDS([REDACTED_FILE_PATH] +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 16),
+        axis.text.y = element_text(size = 12),
+        strip.text.x = element_text(size = 24),
+        axis.title.y = element_text(size = 18),
+        plot.margin = margin(t = 5.5, r = 5.5, b = 5.5, l = 25, unit = "pt"))
+```
+
+```{bash eval=FALSE}
+#!/bin/bash
+#SBATCH -A [REDACTED_PROJECT_ALLOCATION]
+#SBATCH -p genomics
+#SBATCH -t 12:00:00
+#SBATCH -N 1
+#SBATCH --mem=48G
+#SBATCH --ntasks-per-node=12
+#SBATCH --mail-user=[REDACTED_EMAIL_URL]
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --job-name='[REDACTED_DATE_YYMMDD]isrib_rescue_microglia_bcl2fastq'
+
+module purge
+cd [REDACTED_FILE_PATH]
+module load bcl2fastq/2.19.1 
+bcl2fastq --loading-threads 4 --writing-threads 4 --processing-threads 4
+```  
+
+```{r}
+#get samples from file names, link to mouse IDs
+ss = read_csv([REDACTED_FILE_PATH]
+              skip = 15, 
+              trim_ws = T)
+fastq_files = list.files(path = [REDACTED_FILE_PATH]
+                         pattern = "^AM.+\\.fastq\\.gz",
+                         recursive = T,
+                         full.names = T) %>% 
+   as_tibble() %>% 
+  #originally no column name, so add required one
+  dplyr::rename(fastq_1 = value) %>% 
+   #only single-end, so leave empty
+   mutate(fastq_2 = NA) %>% 
+  #location of the sample name in the file path
+   dplyr::mutate(Sample_ID = substring(text = fastq_1, 
+                                       first = regexpr(pattern = "AM_21|AM_NC_21", text = fastq_1), 
+                                       last = (regexpr(pattern = "S\\d+_L00\\d", text = fastq_1) -  2))) %>% 
+   mutate(strandedness = "reverse") %>% 
+   #merge with sample sheet using "Sample_ID"
+   left_join(., ss) %>% 
+   dplyr::select(-contains("index"), -contains("sample", ignore.case = T)) %>% 
+   dplyr::rename(mouse = Description)
+
+#link with metadata from mouse IDs
+md = read_excel([REDACTED_FILE_PATH]
+                sheet = "Group Assignments",
+                range = "A1:Q79") %>% 
+   mutate(mouse = paste(substring(cage, nchar(cage) - 3), ear_tag, sep = "_"),
+          combined = paste(age_group, ISRIB, IAV, sep = "_")) %>% 
+   right_join(., fastq_files) %>% 
+   mutate(combined = factor(ifelse(is.na(combined), yes = "uRNA", no = combined))) %>% 
+  dplyr::filter(ISRIB == "Vehicle" & IAV == "Vehicle")
+
+md_nfcore = md %>% 
+  dplyr::select(-group) %>% 
+  dplyr::rename(sample = mouse) %>% 
+  dplyr::relocate(sample, fastq_1, fastq_2, strandedness) 
+
+write_csv(md_nfcore,
+          [REDACTED_FILE_PATH]
+          na = "")
+```   
+
+```{bash eval=FALSE}
+screen
+cd [REDACTED_FILE_PATH]
+module purge
+module load singularity
+module load graphviz/2.40.1
+module load java/jdk11.0.10
+
+
+nextflow run nf-core/rnaseq \
+-r '3.5' \
+-profile nu_genomics \
+--email '[REDACTED_EMAIL_URL]' \
+--three_prime_clip_r2 3 \
+--genome 'GRCm38' \
+-work-dir [REDACTED_FILE_PATH] \
+--input [REDACTED_FILE_PATH] \
+--outdir [REDACTED_FILE_PATH]
+```
+
+```{r}
+#import gene conversion
+#match scRNA with this version
+mouse_mart = useEnsembl(biomart = "genes", dataset =  "mmusculus_gene_ensembl", version = 110)
+mouse_conv = getBM(attributes = c("ensembl_gene_id", "external_gene_name"), mart = mouse_mart)
+
+#import des
+load([REDACTED_FILE_PATH] 
+tmp = colData(dds) %>% 
+   as.data.frame() %>% 
+   mutate(mouse = substring(text = sample, first = 2)) %>% 
+   dplyr::select(-sizeFactor)
+md_final = md %>% 
+   dplyr::select(-contains("fastq"), -strandedness) %>% 
+   unique()
+md_final = left_join(tmp, md_final) %>% 
+   column_to_rownames("sample") %>% 
+  dplyr::mutate(batch = factor(batch),
+                age_group = factor(age_group))
+all(colnames(dds) == rownames(md_final)) #TRUE
+des = DESeqDataSetFromMatrix(countData = counts(dds, normalized = F), 
+                                  colData = md_final,
+                                  design = ~ age_group)
+```   
+
+```{r}
+pca = plotPCA_manual(object = vst(des), 
+                     intgroup = "age_group", 
+                     pcs = 3, 
+                     ntop = nrow(des),
+                     merge_metadata = TRUE,
+                     return_loadings = TRUE,
+                     custom_annotation = mouse_conv)
+
+ggplot(pca$data, aes(x = PC1, y = PC2, color = age_group, shape = batch)) +
+   geom_point(size = 3)  +
+   labs(x = paste0("PC1 (", pca$percent_var$percent_var[1], "% of variance explained)"),
+        y = paste0("PC2 (", pca$percent_var$percent_var[2], "% of variance explained)")) +
+   theme_bw() +
+   scale_color_nejm()
+ggplot(pca$data, aes(x = PC2, y = PC3, color = age_group, shape = batch)) +
+   geom_point(size = 3) +
+   labs(x = paste0("PC2 (", pca$percent_var$percent_var[2], "% of variance explained)"),
+        y = paste0("PC3 (", pca$percent_var$percent_var[3], "% of variance explained)")) +
+   theme_bw() +
+   scale_color_nejm()
+```  
+
+```{r}
+parametric = DESeq(des,
+                   fitType = "parametric",
+                   parallel = T)
+plotDispEsts(parametric) #realistically this is pretty good
+
+local = DESeq(des,
+              fitType = "local",
+              parallel = T)
+plotDispEsts(local) #modestly better, keep
+
+dge = local
+rm(local, parametric)
+```
+
+```{r}
+aging_res = results(dge,
+                    contrast = c("age_group", "Old", "Young"),
+                    alpha = 0.05,
+                    parallel = T)
+
+aging_hits = id_convert(aging_res, custom_annotation = mouse_conv)
+write.csv(aging_hits, [REDACTED_FILE_PATH]
+
+aging_hits = aging_res %>% 
+   as.data.frame() %>% 
+   dplyr::filter(padj < 0.05) %>% 
+   arrange(desc(log2FoldChange)) %>% 
+   id_convert(results = ., custom_annotation = mouse_conv)
+
+goi = aging_hits %>% 
+  dplyr::filter(grepl("^Ccl|^Irf|^Ifi|^Ifn|^Oas|^Mx|^Csf1", external_gene_name) | 
+                        external_gene_name %in% c("Mertk", "App", "Spp1", "Mki67", "P2ry12",
+                                                  "Apoe", "Axl", "Clec7a", "Cx3cr1", "Cd9", "Trem2", "Cst7",
+                                                  "Tmem119", "B2m", "Ass1", 
+                                                  "Lpl", "Dgat2", 
+                                                  "Acacb", "Elovl6", "Soat1",
+                                                  "Got1", "Itgax",
+                                                  "Pkm", "Eno1", "Pgam1", "Pgk1", "Acod1",
+                                                  "Gpnmb", "Cdkn1a", "Cdkn2a")) %>% 
+  .$external_gene_name %>% 
+  setdiff(., c("Irf2bpl"))
+
+aging_ma = pretty_MA_plot(results = aging_res, 
+                          custom_annotation = mouse_conv, 
+                          label_text_size = (24 / .pt),
+                          genes = goi, 
+                          max_overlaps = 50,
+                          label_only_sig = TRUE,
+                          label_oor = TRUE,
+                          y_min = -3,
+                          y_max = 8.3,
+                                label_n_degs = TRUE) +
+   theme_bw(, base_size = 20) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        axis.title.y = element_text(size = 18),
+        axis.title.x = element_text(size = 18),
+        plot.title = element_text(size = 20, hjust = 0.5)) +
+  labs(title = "Old vs. Young\nBulk, Sorted Microglia")
+aging_ma
+
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 14,
+    height = 8,
+    family = "Arial"
+    )
+aging_ma
+dev.off()
+
+png([REDACTED_FILE_PATH]
+    width = 14,
+    height = 8,
+    res = 300,
+    units = "in",
+    )
+aging_ma
+dev.off()
+
+saveRDS(aging_ma, [REDACTED_FILE_PATH]
+```
+
+```{r warning=FALSE}
+dam_genes = read_excel([REDACTED_FILE_PATH]
+                       skip = 1,
+                       col_names = c("external_gene_name",
+                                     "UMI_per_cell_homeostatic",
+                                     "Log2FC_DAM_over_homeostatic",
+                                     "P_p",
+                                     "P_fdr"), 
+                       col_types = c("text",
+                                     "numeric",
+                                     "numeric",
+                                     "numeric",
+                                     "numeric")) %>% 
+  #calculated their FDR values wrong? ~Double what I'm seeing, but tightly correlated
+  dplyr::mutate(pval = 10 ^ -P_p,
+                fdr_original = 10 ^ -P_fdr,
+                padj = p.adjust(pval, method = "fdr"),
+                UMI_DAM = UMI_per_cell_homeostatic * 2 ^ Log2FC_DAM_over_homeostatic) %>% 
+  #only want positive hits for this purpose, and pick genes with reasonable expression
+  dplyr::filter(padj < 0.05 & 
+                  Log2FC_DAM_over_homeostatic > 0 & 
+                  UMI_DAM >= 0.5 & 
+                  !grepl("^Rpl|^Rps|^Mt-|Gm\\d", external_gene_name))
+
+sen_mayo = read_excel([REDACTED_FILE_PATH]
+                      sheet = "mouse")
+```   
+
+```{r warning=FALSE}
+hallmark = gmtPathways([REDACTED_FILE_PATH]
+
+#add wherry modules
+hallmark$`Disease-Associated Microglia` = dam_genes$external_gene_name
+hallmark$SenMayo = sen_mayo$`Gene(murine)`
+```  
+
+```{r}
+aging_ranks = id_convert(aging_res, custom_annotation = mouse_conv) %>% 
+  dplyr::select(external_gene_name, stat) %>% 
+  dplyr::filter(!is.na(stat)) %>% 
+  dplyr::arrange(desc(stat)) %>% 
+  deframe()
+```
+
+```{r warning=FALSE}
+set.seed(12345)
+gsea_res_aging = fgseaMultilevel(pathways = hallmark,
+                           minSize = 2, 
+                           stats = aging_ranks, 
+                           nproc = 1)
+
+gsea_res_aging %>% 
+  dplyr::arrange(padj) %>% 
+  dplyr::filter(padj < 0.05)
+```
+
+```{r}
+aging_gsea_ep = gsea_res_aging %>% 
+  dplyr::filter(padj < 0.05) %>% 
+  dplyr::arrange(desc(NES)) %>% 
+  dplyr::mutate(pathway = str_to_title(gsub("_", " ", pathway))) %>% 
+  ggplot(aes(x = NES, y = reorder(pathway, NES))) +
+  geom_bar(stat = "identity", fill = "dodgerblue4") +
+  theme_bw() +
+  labs(x = "NES", y = "") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 9,
+    height = 6,
+    family = "Arial"
+    )
+aging_gsea_ep
+dev.off()
+
+saveRDS(aging_gsea_ep, [REDACTED_FILE_PATH]
+
+aging_gsea_ep 
+```   
+
+```{r}
+depletion_visual_methods = png::readPNG([REDACTED_FILE_PATH]
+                                        native = TRUE)
+
+layout = "AAAAAAAAAAA\nBBBBBCCCCCC\nDDDDDEEEEEE"
+enviro_figure = free(wrap_elements(depletion_visual_methods)) + 
+  depletion_mods + depletion_aging_boxplots + 
+  mertk_mods + mertk_aging_boxplots +
+  plot_layout(design = layout) + 
+  plot_annotation(tag_levels = 'a') & theme(plot.tag = element_text(size = 32, face = "bold"))
+
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 32,
+    height = 32,
+    family = "Arial"
+    )
+enviro_figure
+dev.off()
+png([REDACTED_FILE_PATH]
+    width = 32,
+    height = 32,
+    units = "in",
+    res = 300,
+    )
+enviro_figure
+dev.off()
+```   
+
+```{r}
+depletion_hm = png::readPNG([REDACTED_FILE_PATH]
+                            native = TRUE)
+
+layout = "A\nB\nB\nB"
+enviro_supp = free(wrap_elements(depletion_visual_methods)) +
+  free(wrap_elements(depletion_hm)) +
+  plot_layout(design = layout) + 
+  plot_annotation(tag_levels = 'a') & theme(plot.tag = element_text(size = 32, face = "bold"))
+
+cairo_pdf([REDACTED_FILE_PATH]
+    width = 32,
+    height = 32,
+    family = "Arial"
+    )
+enviro_supp
+dev.off()
+```
+
+```{bash eval=FALSE}
+cd [REDACTED_FILE_PATH]
+mkdir merged_fastqs
+cd merged_fastqs
+
+prefix=/gpfs[REDACTED_FILE_PATH]
+j=1
+for i in {101..142}
+do 
+  cur_files=${prefix}${i}_S${j}*'_R1_001.fastq.gz'
+  echo $cur_files
+  out_file='AM_21_'${i}_S${j}'_merged_R1_001.fastq.gz'
+  echo $out_file
+  cat $cur_files > $out_file
+  ((j++))
+done
+```
+
+```{r}
+counts(dge, normalized = F) %>% 
+  as.data.frame() %>% 
+  write_csv(., [REDACTED_FILE_PATH]
+
+filenames = md_nfcore %>% 
+  #handle concatenation
+  dplyr::mutate(filename = basename(fastq_1),
+                filename = gsub("L00\\d", "merged", filename)) %>% 
+  dplyr::select(sample, filename) %>% 
+  unique()
+
+
+geo_md = colData(dge) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("sample") %>% 
+  dplyr::mutate(age_months = lubridate::interval(birthdate, takedown_date) %/% months(1),
+                genotype = "C57BL/6J",
+                sex = "Male",
+                sample = gsub("^X", "", sample)) %>% 
+  dplyr::select(sample, age_months, genotype, age_group, sex) %>% 
+  group_by(age_group) %>% 
+  dplyr::mutate(title = paste(age_group, seq(from = 1, to = n()), sep = "_")) %>% 
+  left_join(., filenames)
+
+write_csv(geo_md, [REDACTED_FILE_PATH]
+
+#cleaned version for pairing with counts
+geo_md %>% 
+  dplyr::select(-c(filename, title)) %>% 
+  write_csv(., [REDACTED_FILE_PATH]
+```   
+
+```{r}
+merged_fastqs = list.files([REDACTED_FILE_PATH]
+                           pattern = "fastq\\.gz",
+                           full.names = TRUE)
+md5s = data.frame(path = c(merged_fastqs, 
+                           [REDACTED_FILE_PATH] 
+                           [REDACTED_FILE_PATH] %>% 
+dplyr::mutate(md5 = tools::md5sum(path),
+              basename = basename(path)) %>% 
+dplyr::select(path, basename, md5) %>% 
+  dplyr::filter(basename %in% geo_md$filename |
+                  grepl("\\.csv", basename))
+
+write_csv(md5s, [REDACTED_FILE_PATH]
+```   
+
+```{r}
+mertk_md = read.csv([REDACTED_FILE_PATH] %>% 
+  dplyr::mutate(age_group = ifelse(grepl("Young", title),
+                                   "Young",
+                                   "Old")) %>% 
+  dplyr::select(-mertk_age) %>% 
+  dplyr::filter(!(sample %in% geo_md$sample))
+depletion_md = read.csv([REDACTED_FILE_PATH]
+combined_md = bind_rows(geo_md, mertk_md, depletion_md) %>% 
+  dplyr::filter(!duplicated(filename))
+
+write_csv(combined_md, [REDACTED_FILE_PATH]
+```
+
+```{r}
+mertk_md5s = read.csv([REDACTED_FILE_PATH]
+depletion_md5s = read.csv([REDACTED_FILE_PATH]
+combined_md5s = bind_rows(md5s, mertk_md5s, depletion_md5s) %>% 
+  dplyr::filter(!duplicated(basename))
+
+write_csv(combined_md5s, [REDACTED_FILE_PATH]
+```

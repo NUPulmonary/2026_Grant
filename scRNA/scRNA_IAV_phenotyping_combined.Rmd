@@ -1,0 +1,266 @@
+```{r setup, message=FALSE}
+library(readxl)
+library(tidyverse)
+library(broom)
+library(lubridate)
+library(ggplot2)
+library(Hmisc)
+library(ggsci)
+library(survival)
+library(survminer)
+library(ggrepel)
+library(Cairo)
+library(patchwork)
+
+npg_pal = pal_npg()(9)
+age_pal = c("Young" = npg_pal[3],
+            "Middle-Age" = npg_pal[2],
+            "Old" = npg_pal[1])
+```
+
+```{r}
+md_b1 = read_excel([REDACTED_FILE_PATH] - Northwestern University/Budinger_Misharin_Lab/microglia_aging_flu/2022_aging_flu_scRNA/[REDACTED_DATE_YYMMDD]aging_flu_scRNA_master_sheet.xlsx",
+               sheet = "Metadata",
+               na = c("", "NA")) %>% 
+  dplyr::select(-c(tail_tag, ear_tag)) %>% 
+  dplyr::mutate(mouse = factor(paste(cage, tail_number, sep = "_")),
+                cage = factor(cage),
+                date_of_birth = as.Date(date_of_birth),
+                genotype = factor(genotype),
+                treatment = factor(treatment),
+                takedown_date = as.Date(takedown_date),
+                instillation_date = as.Date(instillation_date),
+                age_at_takedown = interval(date_of_birth, takedown_date) %/% months(1),
+                age_at_instillation = interval(date_of_birth, instillation_date) %/% months(1),
+                age_group = factor(ifelse(age_at_instillation < 16,
+                                          yes = "Young",
+                                          no = "Old"),
+                                   levels = c("Young", "Middle-Age", "Old")),
+                combined = factor(paste(age_group, treatment, sep = "_"))) %>%
+  dplyr::filter(genotype != "Mertk-CR" &
+                  #exclude animals that did not get sick
+                  !(mouse %in% c("CC[REDACTED_IDENTIFIER]_3", "CC[REDACTED_IDENTIFIER]_4", "CC[REDACTED_IDENTIFIER]_1", "CC[REDACTED_IDENTIFIER]_2", "CC[REDACTED_IDENTIFIER]_0")))
+
+md_b2 = read_excel([REDACTED_FILE_PATH] - Northwestern University/Budinger_Misharin_Lab/microglia_aging_flu/2022_aging_flu_scRNA/2023_12mo_18mo_additions/[REDACTED_DATE_YYMMDD]aging_flu_scRNA_master_sheet.xlsx",
+               sheet = "Metadata",
+               na = c("", "NA")) %>% 
+  dplyr::mutate(mouse = factor(paste(cage, ear_tag, sep = "_")),
+                cage = factor(cage),
+                date_of_birth = as.Date(date_of_birth),
+                genotype = factor(genotype),
+                instillation_date = as.Date(instillation_date),
+                takedown_date = as.Date(takedown_date),
+                age_at_takedown = interval(date_of_birth, takedown_date) %/% months(1),
+                age_at_instillation = interval(date_of_birth, instillation_date) %/% months(1),
+                age_group = factor(case_when(age_at_instillation < 8 ~ "Young",
+                                             age_at_instillation >= 8 & age_at_instillation < 16 ~ "Middle-Age",
+                                              age_at_instillation >= 16 ~ "Old"),
+                                   levels = c("Young", "Middle-Age", "Old")),
+                combined = factor(paste(age_group, treatment, sep = "_")))
+
+md = bind_rows(md_b1, md_b2) %>% 
+  dplyr::rename(Treatment = treatment)
+rm(md_b1, md_b2)
+```
+
+```{r}
+table(md$combined)
+```
+
+```{r}
+md %>% 
+  group_by(age_group) %>% 
+  dplyr::filter(dead == FALSE | is.na(dead)) %>% 
+  dplyr::summarize(min = min(age_at_takedown, na.rm = TRUE),
+                   max = max(age_at_takedown, na.rm = TRUE))
+```
+
+```{r}
+weight_data_b1 = read_excel([REDACTED_FILE_PATH] - Northwestern University/Budinger_Misharin_Lab/microglia_aging_flu/2022_aging_flu_scRNA/[REDACTED_DATE_YYMMDD]aging_flu_scRNA_master_sheet.xlsx", 
+               sheet = "Weights",
+               na = c("", "NA")) %>% 
+  dplyr::select(-c(tail_tag)) %>% 
+  pivot_longer(cols = `2022-05-09`:ncol(.),
+               names_to = "date",
+               values_to = "weight") %>% 
+  dplyr::mutate(date = as.Date(date, ),
+                cage = factor(cage)) %>% 
+  left_join(md) %>% 
+  mutate(dpi = interval(instillation_date, date) %/% days(1)) %>% 
+  dplyr::filter(!is.na(weight)) %>% 
+  arrange(mouse, date) %>% 
+  group_by(mouse) %>% 
+  dplyr::mutate(norm_weight = weight / dplyr::first(weight)) %>% 
+  ungroup() %>% 
+  dplyr::filter(genotype != "Mertk-CR" &
+                  #exclude animals that did not get sick
+                  !(mouse %in% c("CC[REDACTED_IDENTIFIER]_3", "CC[REDACTED_IDENTIFIER]_4", "CC[REDACTED_IDENTIFIER]_1", "CC[REDACTED_IDENTIFIER]_2", "CC[REDACTED_IDENTIFIER]_0")))
+
+weight_data_b2 = read_excel([REDACTED_FILE_PATH] - Northwestern University/Budinger_Misharin_Lab/microglia_aging_flu/2022_aging_flu_scRNA/2023_12mo_18mo_additions/[REDACTED_DATE_YYMMDD]aging_flu_scRNA_master_sheet.xlsx", 
+               sheet = "Weights",
+               na = c("", "NA")) %>% 
+  pivot_longer(cols = `2023-12-06`:ncol(.),
+               names_to = "date",
+               values_to = "weight") %>% 
+  dplyr::mutate(date = as.Date(date, ),
+                cage = factor(cage)) %>% 
+  left_join(md) %>% 
+  mutate(dpi = interval(instillation_date, date) %/% days(1)) %>% 
+  dplyr::filter(!is.na(weight)) %>% 
+  arrange(mouse, date) %>% 
+  group_by(mouse) %>% 
+  dplyr::mutate(norm_weight = weight / dplyr::first(weight)) %>% 
+  ungroup()
+
+weight_data = bind_rows(weight_data_b1, weight_data_b2)
+rm(weight_data_b1, weight_data_b2)
+```   
+
+```{r}
+survival_data_b1 = read_excel([REDACTED_FILE_PATH] - Northwestern University/Budinger_Misharin_Lab/microglia_aging_flu/2022_aging_flu_scRNA/[REDACTED_DATE_YYMMDD]aging_flu_scRNA_master_sheet.xlsx", 
+                          sheet = "Mortality",
+                          na = c("", "NA")) %>%
+  dplyr::mutate(tail_number = as.numeric(tail_number)) %>% 
+  left_join(., md)  %>% 
+  dplyr::filter(genotype != "Mertk-CR" &
+                  #exclude animals that did not get sick
+                  !(mouse %in% c("CC[REDACTED_IDENTIFIER]_3", "CC[REDACTED_IDENTIFIER]_4", "CC[REDACTED_IDENTIFIER]_1", "CC[REDACTED_IDENTIFIER]_2", "CC[REDACTED_IDENTIFIER]_0"))) %>% 
+  #recode mice that survived as censored on takedown date
+  dplyr::mutate(status = ifelse(is.na(status),
+                                yes = 0,
+                                no = status)) %>% 
+  dplyr::mutate(date = as.Date(ifelse(is.na(date),
+                              yes = as.character(takedown_date),
+                              no = date))) %>% 
+  dplyr::mutate(dpi = interval(instillation_date, date) %/% days(1))
+
+survival_data_b2 = read_excel([REDACTED_FILE_PATH] - Northwestern University/Budinger_Misharin_Lab/microglia_aging_flu/2022_aging_flu_scRNA/2023_12mo_18mo_additions/[REDACTED_DATE_YYMMDD]aging_flu_scRNA_master_sheet.xlsx", 
+                          sheet = "Mortality",
+                          na = c("", "NA")) %>%
+  left_join(md) %>% 
+  #recode mice that survived as censored on takedown date
+  dplyr::mutate(status = ifelse(is.na(status),
+                                yes = 0,
+                                no = status)) %>% 
+  dplyr::mutate(date = as.Date(ifelse(is.na(date),
+                              yes = as.character(takedown_date),
+                              no = date))) %>% 
+  dplyr::mutate(dpi = interval(instillation_date, date) %/% days(1))
+
+survival_data = bind_rows(survival_data_b1, survival_data_b2)
+rm(survival_data_b1, survival_data_b2)
+```   
+
+```{r}
+weight_plot = ggplot(weight_data,
+       aes(x = dpi, y = norm_weight, linetype = Treatment, color = age_group)) +
+  stat_summary(fun = mean, geom = "line", size = 1) + 
+   stat_summary(fun.data = "mean_sdl",
+                fun.args = list(mult = 1), 
+                geom = "errorbar",
+                width = 0.3) +
+  ylab("Normalized Weight ± SD") +
+  xlab("Days Post-Infection") + 
+  theme_bw(base_size = 15, base_family = "Arial") +
+  theme(legend.position = "none") +
+  scale_color_manual(name = "Age Group",
+                     values = age_pal)
+
+weight_plot
+```   
+
+```{r}
+ggplot(weight_data,
+       aes(x = dpi, y = norm_weight)) +
+  facet_wrap(~ age_group) +
+  geom_line(aes(color = Treatment, shape = mouse)) +
+  ylab("Normalized Weight") +
+  xlab("Days Post-Infection") + 
+  theme_bw(base_size = 15, base_family = "Arial") +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+weight_stats = weight_data %>% 
+  dplyr::filter(Treatment != "Naïve") %>% 
+  group_by(dpi) %>% 
+  dplyr::summarize(pval = oneway.test(norm_weight ~ age_group, data = cur_data(), var.equal = TRUE)$p.value) %>% 
+  dplyr::mutate(padj = p.adjust(pval, method = "fdr"))
+```
+
+```{r}
+survival_model = survfit(Surv(time = dpi, event = status, type = "right") ~ age_group + Treatment, 
+                         data = survival_data)
+
+survival_plot = ggsurvplot(survival_model, 
+           data = survival_data,
+           conf.int = F,
+           pval = TRUE,
+           linetype = "Treatment",
+           color = "age_group",
+           palette = age_pal,
+           fun = "pct",
+           cumevents = F,
+           legend = "right",
+           legend.title = c("Age Group", "Treatment"),
+           ggtheme = theme_bw(base_size = 15)) +
+  xlab("Days Post-Infection") +
+  ylab("Percent Survival")
+
+survival_plot
+```   
+
+```{r}
+flow_plot_bulk = wrap_ele png::readPNG([REDACTED_FILE_PATH] - Northwestern University/Budinger_Misharin_Lab/microglia_aging_flu/2022_aging_flu_scRNA/v1_layout.png", native = TRUE)
+
+flow_plot_metabo = png::readPNG([REDACTED_FILE_PATH] - Northwestern University/Budinger_Misharin_Lab/microglia_aging_flu/2022_aging_flu_scRNA/v2_layout.png", native = TRUE)
+
+microglia_flow = readRDS([REDACTED_FILE_PATH] - Northwestern University/2025_Grant_Mouse/Figures/Figure S1/[REDACTED_DATE_YYMMDD]flow_DAA_microglia.rds")
+
+layout = "AABB\nCCCC\nCCCC"
+
+fig_s1 = weight_plot +
+  survival_plot$plot + 
+  flow_plot +
+  microglia_flow +
+  plot_layout(design = layout) +
+  plot_annotation(tag_levels = 'a') & theme(plot.tag = element_text(size = 20, family = "Arial"))
+
+cairo_pdf([REDACTED_FILE_PATH] - Northwestern University/2024_Grant_Mouse/Figures/Figure S1/fig_s1_v2.pdf",
+    width = 14,
+    height = 12, 
+    family = "Arial")
+fig_s1
+dev.off()
+```
+
+```{r}
+survival_model_binned = survfit(Surv(time = dpi, event = status, type = "right") ~ Treatment, 
+                         data = survival_data)
+
+ggsurvplot(survival_model_binned, 
+           data = survival_data,
+           conf.int = F,
+           pval = TRUE,
+           pval.method = TRUE,
+           color = "Treatment",
+           fun = "pct",
+           cumevents = F,
+           legend = "right",
+           legend.title = c("Treatment"),
+           ggtheme = theme_bw(base_size = 15)) +
+  xlab("Days Post-Infection") +
+  ylab("Percent Survival")
+
+1 - min(survival_model_binned$surv)
+```
+
+```{r}
+losses = weight_data %>% 
+  dplyr::filter(Treatment != "Naïve") %>% 
+  group_by(mouse) %>% 
+  dplyr::summarize(max_weight_loss = (1 - min(norm_weight, na.rm = TRUE)) * 100)
+
+mean(losses$max_weight_loss)
+sd(losses$max_weight_loss)
+```

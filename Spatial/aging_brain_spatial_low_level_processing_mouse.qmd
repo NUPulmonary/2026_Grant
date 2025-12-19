@@ -1,0 +1,83 @@
+```{r setup}
+library(Seurat)
+library(future)
+library(tidyverse)
+library(reticulate)
+library(RPushbullet)
+library(parallel)
+
+#future
+plan("multisession", workers = 1)
+options(future.globals.maxSize = 40 * 1e3 * 1024^2) #40gb
+
+#helper functions
+source([REDACTED_FILE_PATH]
+```
+
+```{r}
+brain_dirs_baysor = list.dirs([REDACTED_FILE_PATH]
+                              recursive = FALSE)
+brain_dirs_baysor = brain_dirs_baysor[grepl("Rogan_output-X", brain_dirs_baysor)]
+names(brain_dirs_baysor) = basename(brain_dirs_baysor)
+
+#note that wrong panel was entered into Xenium instrument and manual swap was made
+#now need to remove meaningless codewords as well
+
+xeniae = mclapply(brain_dirs_baysor, function(dir){
+  sample_name = basename(dir)
+  cur_dataset = LoadXenium(data.dir = paste0(dir, "/outs/Baysor_legacy_0pt5/Resegmentation_0pt5/outs"),
+                           fov = sample_name,
+                           mols.qv.threshold = 20)
+  return(cur_dataset) }, 
+  mc.cores = 1,
+  mc.preschedule = FALSE)
+names(xeniae) = names(brain_dirs_baysor)
+
+complete = merge(xeniae[[1]], xeniae[2:length(xeniae)], add.cell.ids = names(xeniae))
+rm(xeniae)
+gc()
+```
+
+```{r}
+md_minimal = data.frame(sample = factor(c("Rogan_output-XETG00190__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__193909", 
+                                          "Rogan_output-XETG00190__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__193909",
+                                          "Rogan_output-XETG00191__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__181046",
+                                          "Rogan_output-XETG00191__[REDACTED_IDENTIFIER]__Misharin_mBrain_1__[REDACTED_IDENTIFIER]__181046")),
+                        mouse = factor(c("5010_3", "5007_2", "5007_1", "5010_2")),
+                        age_group = factor(c("Old", "Young", "Young", "Old")),
+                        age_months = factor(c("18mo", "4mo", "4mo", "18mo")),
+                        sex = factor(rep("Male", 4)))
+md_final = complete@meta.data %>% 
+  dplyr::mutate(sample = factor(substring(rownames(.), 1, 68))) %>% 
+  left_join(., md_minimal)
+
+complete = AddMetaData(complete, metadata = md_final$mouse, col.name = "mouse")
+complete = AddMetaData(complete, metadata = md_final$sample, col.name = "sample")
+complete = AddMetaData(complete, metadata = md_final$age_group, col.name = "age_group")
+complete = AddMetaData(complete, metadata = md_final$age_months, col.name = "age_months")
+complete = AddMetaData(complete, metadata = md_final$sex, col.name = "sex")
+```
+
+```{r}
+ggplot(complete@meta.data, aes(x = nCount_Xenium)) +
+  geom_histogram(bins = 200) + 
+  scale_x_log10() +
+  geom_vline(xintercept = 20, linetype = 2)
+
+ggplot(complete@meta.data, aes(x = nFeature_Xenium)) +
+  geom_histogram(bins = 200) + 
+  scale_x_log10() +
+  geom_vline(xintercept = 15, linetype = 2)
+```
+
+```{r}
+complete = subset(complete, nFeature_Xenium >= 15 & nCount_Xenium >= 20)
+dim(complete)
+```
+
+```{r}
+plan("multisession", workers = 1)
+complete = SCTransform(complete, assay = "Xenium", vst.flavor = "v2")
+saveRDS(complete, [REDACTED_FILE_PATH]
+pbPost(type = "note", title = "Normalization completed and object saved")
+```
